@@ -4,6 +4,7 @@ Uso: python -m bot.main
 """
 
 import logging
+import re
 import secrets
 from datetime import date
 from decimal import Decimal
@@ -26,6 +27,17 @@ log = logging.getLogger(__name__)
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
          "septiembre", "octubre", "noviembre", "diciembre"]
 
+# "test" o "#prueba" en el mensaje -> movimiento de prueba (no cuenta en saldos ni resúmenes).
+_RE_PRUEBA = re.compile(r"(?<!\w)(#?test|#prueba)(?!\w)", re.IGNORECASE)
+
+
+def _es_prueba(texto: str) -> bool:
+    return bool(_RE_PRUEBA.search(texto or ""))
+
+
+def _sin_marca_prueba(texto: str) -> str:
+    return re.sub(r"\s{2,}", " ", _RE_PRUEBA.sub("", texto)).strip(" ,.:-")
+
 AYUDA = (
     "✍️ <b>Escríbeme como en tus notas</b>\n"
     "   <i>hoy gasté 3500 en uber</i>\n"
@@ -36,7 +48,9 @@ AYUDA = (
     "/saldo — quién le debe a quién\n"
     "/resumen — gastos del mes\n"
     "/gasto <code>monto descripción</code> — registro rápido sin IA\n"
-    "/ingreso <code>monto descripción</code> — registro rápido sin IA"
+    "/ingreso <code>monto descripción</code> — registro rápido sin IA\n\n"
+    "🧪 Si escribes <b>test</b> en el mensaje, lo anoto como prueba: no cuenta en saldos ni resúmenes. "
+    "Los borras todos con /borrar_pruebas"
 )
 
 
@@ -79,6 +93,8 @@ def _describir(mov: dict, usuario: dict, pareja: dict | None) -> str:
         lineas.append(f"👤 Individual, pagado por {escape(usuario['nombre'])}")
     else:
         lineas.append(f"👤 Ingreso de {escape(usuario['nombre'])}")
+    if mov.get("es_prueba"):
+        lineas.append("🧪 <b>PRUEBA</b>: no cuenta en saldos ni resúmenes")
     return "\n".join(lineas)
 
 
@@ -98,6 +114,7 @@ def _guardar(mov: dict, usuario: dict, pareja: dict | None, mensaje_original: st
         mensaje_original=mensaje_original,
         repartos=repartos,
         fecha=mov["fecha"],
+        es_prueba=mov.get("es_prueba", False),
     )
 
 
@@ -133,8 +150,10 @@ async def _registro_rapido(update: Update, context: ContextTypes.DEFAULT_TYPE, t
     usuario = await _usuario_o_aviso(update)
     if usuario is None:
         return
+    es_prueba = _es_prueba(update.message.text)
+    args = [a for a in context.args if not _RE_PRUEBA.fullmatch(a)]
     try:
-        datos = parser.interpretar(context.args, finanzas.nombres_categorias(tipo),
+        datos = parser.interpretar(args, finanzas.nombres_categorias(tipo),
                                    permitir_reparto=(tipo == "gasto"))
     except parser.ErrorFormato as e:
         await update.message.reply_text(f"{e}\nEjemplo: /{tipo} 15000 super lider")
@@ -148,6 +167,7 @@ async def _registro_rapido(update: Update, context: ContextTypes.DEFAULT_TYPE, t
         "descripcion": datos.descripcion,
         "fecha": finanzas.hoy(),
         "porcentaje_pagador": datos.porcentaje_pagador,
+        "es_prueba": es_prueba,
     }
     pareja = finanzas.otro_usuario(usuario["id"])
     if problema := _problema([mov], pareja):
@@ -203,6 +223,16 @@ async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(lineas), parse_mode="HTML")
 
 
+async def borrar_pruebas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await _usuario_o_aviso(update) is None:
+        return
+    n = finanzas.borrar_pruebas()
+    if n:
+        await update.message.reply_text(f"🧹 Listo, borré {n} movimiento{'s' if n != 1 else ''} de prueba.")
+    else:
+        await update.message.reply_text("No había movimientos de prueba 👌")
+
+
 # ---------- lenguaje natural ----------
 
 async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -214,17 +244,19 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     # ¿Es la corrección de algo que el bot mostró antes?
     anterior = None
+    es_prueba = _es_prueba(texto)
     pid_corrigiendo = context.user_data.pop("corrigiendo", None)
     if pid_corrigiendo and pid_corrigiendo in pendientes:
         previo = pendientes.pop(pid_corrigiendo)
         anterior = (previo["mensaje"], previo["crudo"])
+        es_prueba = es_prueba or previo["es_prueba"]
 
     await update.message.chat.send_action(ChatAction.TYPING)
     try:
         datos = await interprete.interpretar(
-            texto, finanzas.hoy(),
+            _sin_marca_prueba(texto), finanzas.hoy(),
             finanzas.nombres_categorias("gasto"), finanzas.nombres_categorias("ingreso"),
-            anterior=anterior,
+            anterior=(_sin_marca_prueba(anterior[0]), anterior[1]) if anterior else None,
         )
     except interprete.ErrorInterprete as e:
         await update.message.reply_text(str(e))
@@ -246,7 +278,10 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     mensaje_original = f"{anterior[0]} | corrección: {texto}" if anterior else texto
     pid = secrets.token_hex(4)
-    pendientes[pid] = {"movimientos": datos["movimientos"], "mensaje": mensaje_original, "crudo": datos["crudo"]}
+    for m in datos["movimientos"]:
+        m["es_prueba"] = es_prueba
+    pendientes[pid] = {"movimientos": datos["movimientos"], "mensaje": mensaje_original, "crudo": datos["crudo"],
+                       "es_prueba": es_prueba}
 
     cuerpo = "\n\n".join(_describir(m, usuario, pareja) for m in datos["movimientos"])
     botones = InlineKeyboardMarkup([[
@@ -315,6 +350,7 @@ async def _configurar_menu(app: Application) -> None:
         BotCommand("resumen", "Resumen del mes"),
         BotCommand("gasto", "Registro rápido de gasto"),
         BotCommand("ingreso", "Registro rápido de ingreso"),
+        BotCommand("borrar_pruebas", "Borrar movimientos de prueba"),
         BotCommand("ayuda", "Cómo usar el bot"),
     ])
 
@@ -329,6 +365,7 @@ def main() -> None:
     app.add_handler(CommandHandler("ingreso", ingreso, filters=autorizados))
     app.add_handler(CommandHandler("saldo", saldo, filters=autorizados))
     app.add_handler(CommandHandler("resumen", resumen, filters=autorizados))
+    app.add_handler(CommandHandler("borrar_pruebas", borrar_pruebas, filters=autorizados))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & autorizados, texto_libre))
     app.add_handler(CallbackQueryHandler(botones_pendiente, pattern=r"^(conf|corr|canc):[0-9a-f]+$"))
     app.add_handler(CallbackQueryHandler(deshacer, pattern=r"^deshacer:[\d,]+$"))

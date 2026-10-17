@@ -50,6 +50,7 @@ def registrar_movimiento(
     mensaje_original: str,
     repartos: dict[int, Decimal] | None = None,
     fecha: date | None = None,
+    es_prueba: bool = False,
 ) -> int:
     """Guarda un movimiento en CLP. `repartos` = {usuario_id: porcentaje} si es compartido."""
     if moneda != "CLP":
@@ -58,12 +59,12 @@ def registrar_movimiento(
         movimiento_id = conn.execute(
             """
             INSERT INTO movimientos (tipo, monto, moneda, monto_base, tipo_cambio_usado, categoria_id,
-                                     pagado_por, fecha, descripcion, es_compartido, mensaje_original)
-            VALUES (%s, %s, %s, %s, 1, %s, %s, %s, %s, %s, %s)
+                                     pagado_por, fecha, descripcion, es_compartido, mensaje_original, es_prueba)
+            VALUES (%s, %s, %s, %s, 1, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (tipo, monto, moneda, monto, categoria_id, pagado_por, fecha or hoy(), descripcion or None,
-             bool(repartos), mensaje_original),
+             bool(repartos), mensaje_original, es_prueba),
         ).fetchone()["id"]
         for usuario_id, porcentaje in (repartos or {}).items():
             conn.execute(
@@ -82,6 +83,12 @@ def borrar_movimiento(movimiento_id: int, usuario_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def borrar_pruebas() -> int:
+    """Borra todos los movimientos de prueba. Devuelve cuántos borró."""
+    with conectar() as conn:
+        return conn.execute("DELETE FROM movimientos WHERE es_prueba").rowcount
+
+
 def balances() -> list[dict]:
     """Balance de cada usuario en CLP. Positivo = le deben; negativo = debe."""
     with conectar() as conn:
@@ -90,13 +97,13 @@ def balances() -> list[dict]:
             WITH pagado AS (
                 SELECT pagado_por AS usuario_id, SUM(monto_base) AS total
                 FROM movimientos
-                WHERE es_compartido AND tipo = 'gasto'
+                WHERE es_compartido AND tipo = 'gasto' AND NOT es_prueba
                 GROUP BY pagado_por
             ), cuota AS (
                 SELECT r.usuario_id, SUM(m.monto_base * r.porcentaje / 100) AS total
                 FROM repartos r
                 JOIN movimientos m ON m.id = r.movimiento_id
-                WHERE m.es_compartido AND m.tipo = 'gasto'
+                WHERE m.es_compartido AND m.tipo = 'gasto' AND NOT m.es_prueba
                 GROUP BY r.usuario_id
             ), liq_pagadas AS (
                 SELECT de_usuario AS usuario_id, SUM(monto_base) AS total FROM liquidaciones GROUP BY de_usuario
@@ -126,7 +133,7 @@ def resumen_mes(usuario_id: int, mes: date | None = None) -> dict:
                    SUM(m.monto_base) AS total
             FROM movimientos m
             LEFT JOIN categorias c ON c.id = m.categoria_id
-            WHERE m.tipo = 'gasto' AND date_trunc('month', m.fecha) = %s
+            WHERE m.tipo = 'gasto' AND NOT m.es_prueba AND date_trunc('month', m.fecha) = %s
             GROUP BY 1, 2
             ORDER BY total DESC
             """,
@@ -137,7 +144,7 @@ def resumen_mes(usuario_id: int, mes: date | None = None) -> dict:
             SELECT u.nombre, COALESCE(SUM(m.monto_base), 0) AS total
             FROM usuarios u
             LEFT JOIN movimientos m
-                   ON m.pagado_por = u.id AND m.tipo = 'gasto' AND date_trunc('month', m.fecha) = %s
+                   ON m.pagado_por = u.id AND m.tipo = 'gasto' AND NOT m.es_prueba AND date_trunc('month', m.fecha) = %s
             GROUP BY u.id, u.nombre
             ORDER BY u.id
             """,
@@ -147,7 +154,7 @@ def resumen_mes(usuario_id: int, mes: date | None = None) -> dict:
             """
             SELECT COALESCE(SUM(monto_base), 0) AS total
             FROM movimientos
-            WHERE tipo = 'ingreso' AND pagado_por = %s AND date_trunc('month', fecha) = %s
+            WHERE tipo = 'ingreso' AND NOT es_prueba AND pagado_por = %s AND date_trunc('month', fecha) = %s
             """,
             (usuario_id, mes),
         ).fetchone()["total"]

@@ -67,6 +67,8 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 - Categorías iniciales en `migrations/002_categorias_iniciales.sql`.
 - `liquidaciones` también guarda `monto_base` y `tipo_cambio_usado` para calcular el saldo en CLP.
 - Fechas en zona horaria America/Santiago.
+- Movimientos de prueba: si el mensaje trae "test" o "#prueba" se guardan con `es_prueba = true`.
+  Toda consulta de saldos/resúmenes/dashboards debe filtrar `NOT es_prueba`. /borrar_pruebas los elimina.
 
 ## Decisiones pendientes
 - Visibilidad de ingresos individuales (por ahora /resumen muestra solo los ingresos propios)
