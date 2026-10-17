@@ -15,6 +15,7 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from bot import comun, interprete, plata
+from bot import hogar as hogar_bot
 from core import finanzas, hogar, metas, reportes
 from core.finanzas import formatear_clp
 
@@ -153,10 +154,12 @@ async def cmd_semana(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def bucle_programados(bot: Bot) -> None:
-    """Envía el resumen semanal los domingos desde las 20:00 (una vez por semana)."""
+    """Aviso diario de tareas (9:00) y resumen semanal los domingos desde las 20:00. Cada uno se envía una vez."""
     while True:
         try:
             ahora = finanzas.ahora()
+            if ahora.hour >= 9 and await asyncio.to_thread(hogar.reservar_envio, f"tareas-{ahora:%Y-%m-%d}"):
+                await hogar_bot.avisar_tareas_del_dia(bot)
             if ahora.weekday() == 6 and ahora.hour >= 20:
                 clave = f"resumen-semanal-{ahora:%G-W%V}"
                 if await asyncio.to_thread(hogar.reservar_envio, clave):

@@ -32,6 +32,7 @@ INTENCIONES = [
     "movimientos", "pago_pareja", "meta_nueva", "meta_aporte", "ver_metas",
     "compras_agregar", "ver_lista", "recordatorio", "ver_recordatorios",
     "panorama_agregar", "panorama_sugerir", "nota_guardar", "nota_buscar",
+    "tarea_nueva", "ver_tareas", "tarea_hecha", "menu_semanal",
     "consulta", "otro",
 ]
 
@@ -92,7 +93,16 @@ Elige UNA intención y llena solo su lista; deja las demás listas vacías.
       ya corresponde a una categoría completa (ej: "transporte"), usa categoria y deja busqueda vacía.
     Para las demás intenciones llena consulta igual con valores neutros (no se usará).
     Preguntas sobre quién le debe a quién también son consulta con metrica "gastos" y agrupar "nada".
-15. otro: cualquier otra cosa (saludos, conversación).
+15. tarea_nueva: una tarea de la casa que se repite ("la basura se saca cada 3 días, nos turnamos",
+    "yo riego las plantas todas las semanas"). nombre corto con mayúscula inicial ("Sacar la basura"),
+    cada_dias (semanal = 7, quincenal = 14, mensual = 30), quien: "turnos" si se turnan o no dice,
+    "yo" si la hace quien escribe, "pareja" si la hace la otra persona.
+16. ver_tareas: quiere ver las tareas o a quién le toca qué.
+17. tarea_hecha: avisa que hizo una tarea ("ya saqué la basura"). busqueda = nombre EXACTO de una de las
+    tareas activas listadas; si no calza ninguna, intencion = "otro" y pregunta cuál.
+18. menu_semanal: pide ideas de comidas o un menú para la semana. busqueda = preferencias mencionadas
+    ("vegetariano", "rápido", "barato", "solo 3 días") o "".
+19. otro: cualquier otra cosa (saludos, conversación).
 
 Imágenes: si viene una foto de una boleta, voucher o comprobante, la intención es movimientos con UN solo
 gasto por el TOTAL pagado (no cada ítem): descripcion = comercio (y qué se compró, breve), fecha = la de la
@@ -157,6 +167,10 @@ def _schema(categorias: list[str]) -> dict:
         "notas": {"type": "array", "items": _obj({"clave": texto, "valor": texto})},
         "filtro_tipo": {"type": "string", "enum": TIPOS_PANORAMA + ["cualquiera"]},
         "busqueda": texto,
+        "tareas": {"type": "array", "items": _obj({
+            "nombre": texto, "cada_dias": {"type": "integer"},
+            "quien": {"type": "string", "enum": ["turnos", "yo", "pareja"]},
+        })},
         "consulta": _obj({
             "metrica": {"type": "string", "enum": ["gastos", "ingresos"]},
             "desde": {"type": "string", "format": "date"},
@@ -180,6 +194,7 @@ async def interpretar(
     categorias_gasto: list[str],
     categorias_ingreso: list[str],
     metas_activas: list[str],
+    tareas_activas: list[str] = (),
     anterior: tuple[str, str] | None = None,
     contexto: str | None = None,
     imagen: bytes | None = None,
@@ -191,7 +206,8 @@ async def interpretar(
     """
     sistema = SISTEMA.format(gastos=", ".join(categorias_gasto), ingresos=", ".join(categorias_ingreso))
     encabezado = (f"Ahora: {DIAS[ahora.weekday()]} {ahora:%Y-%m-%d %H:%M} (hora de Chile).\n"
-                  f"Metas activas: {', '.join(metas_activas) or 'ninguna'}.\n")
+                  f"Metas activas: {', '.join(metas_activas) or 'ninguna'}.\n"
+                  f"Tareas activas: {', '.join(tareas_activas) or 'ninguna'}.\n")
     if contexto:
         encabezado += f"Contexto: {contexto}\n"
     if anterior:
@@ -257,10 +273,13 @@ async def interpretar(
     # Si la intención quedó sin datos, se trata como conversación.
     requeridos = {"movimientos": "movimientos", "pago_pareja": "pagos", "meta_nueva": "metas_nuevas",
                   "meta_aporte": "aportes", "compras_agregar": "compras", "recordatorio": "recordatorios",
-                  "panorama_agregar": "panoramas", "nota_guardar": "notas"}
+                  "panorama_agregar": "panoramas", "nota_guardar": "notas", "tarea_nueva": "tareas"}
+    datos["tareas"] = [t for t in datos["tareas"] if t["cada_dias"] > 0]
     lista = requeridos.get(datos["intencion"])
     if lista and not datos[lista]:
         datos["intencion"] = "otro"
+    if datos["intencion"] == "tarea_hecha" and datos["busqueda"] not in tareas_activas:
+        datos["intencion"] = "ver_tareas"
     return datos
 
 
@@ -329,3 +348,33 @@ def _validar_recordatorio(r: dict, ahora: datetime) -> dict:
     except ValueError:
         fecha_hora = datetime.combine(ahora.date(), time(9, 0), tzinfo=ZONA)
     return {"texto": r["texto"].strip(), "fecha_hora": fecha_hora, "repetir": r["repetir"], "para": r["para"]}
+
+
+MENU_SISTEMA = """Eres "Pimpollo", amigo chileno buena onda de una pareja en Chile. Propón un menú de cenas caseras para la
+semana: platos variados, ricos y realistas para cocinar en casa un día de semana, con ingredientes fáciles de
+encontrar en un supermercado chileno. Respeta las preferencias que te den. Arma además UNA lista de compras
+consolidada (sumando cantidades entre platos, para 2 personas), sin básicos de despensa (sal, aceite,
+pimienta, azúcar). comentario: una frase corta con modismos chilenos suaves y máximo un emoji."""
+
+
+async def generar_menu(preferencias: str) -> dict:
+    """Menú semanal generado por Claude: {"platos": [{dia, plato}], "ingredientes": [{nombre, cantidad}], "comentario"}."""
+    schema = _obj({
+        "platos": {"type": "array", "items": _obj({"dia": {"type": "string"}, "plato": {"type": "string"}})},
+        "ingredientes": {"type": "array", "items": _obj({"nombre": {"type": "string"}, "cantidad": {"type": "string"}})},
+        "comentario": {"type": "string"},
+    })
+    try:
+        respuesta = await _client().messages.create(
+            model=config.claude_model(),
+            max_tokens=6000,
+            system=MENU_SISTEMA,
+            messages=[{"role": "user", "content": f"Preferencias: {preferencias or 'ninguna en especial'}"}],
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+        )
+    except anthropic.APIError as e:
+        log.exception("Error generando menú")
+        raise ErrorInterprete("Pucha, no pude armar el menú ahora. Intenta en un rato 🙏") from e
+    if respuesta.stop_reason != "end_turn":
+        raise ErrorInterprete("No me salió el menú, pídemelo de nuevo 🙏")
+    return json.loads(next(b.text for b in respuesta.content if b.type == "text"))

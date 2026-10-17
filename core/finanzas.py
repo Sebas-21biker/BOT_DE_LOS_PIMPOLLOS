@@ -4,6 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from core import cambio
 from core.db import conectar
 
 ZONA = ZoneInfo("America/Santiago")
@@ -61,18 +62,21 @@ def registrar_movimiento(
     fecha: date | None = None,
     es_prueba: bool = False,
 ) -> int:
-    """Guarda un movimiento en CLP. `repartos` = {usuario_id: porcentaje} si es compartido."""
-    if moneda != "CLP":
-        raise NotImplementedError("Por ahora solo CLP")
+    """Guarda un movimiento; convierte a CLP con el tipo de cambio del día.
+
+    `repartos` = {usuario_id: porcentaje} si es compartido.
+    """
+    tasa = cambio.tasa(moneda, hoy())
+    monto_base = (monto * tasa).quantize(Decimal("0.01"))
     with conectar() as conn, conn.transaction():
         movimiento_id = conn.execute(
             """
             INSERT INTO movimientos (tipo, monto, moneda, monto_base, tipo_cambio_usado, categoria_id,
                                      pagado_por, fecha, descripcion, es_compartido, mensaje_original, es_prueba)
-            VALUES (%s, %s, %s, %s, 1, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (tipo, monto, moneda, monto, categoria_id, pagado_por, fecha or hoy(), descripcion or None,
+            (tipo, monto, moneda, monto_base, tasa, categoria_id, pagado_por, fecha or hoy(), descripcion or None,
              bool(repartos), mensaje_original, es_prueba),
         ).fetchone()["id"]
         for usuario_id, porcentaje in (repartos or {}).items():

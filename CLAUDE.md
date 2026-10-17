@@ -85,6 +85,14 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 - Avisos a la pareja por privado cuando hay gastos compartidos, pagos, aportes a metas o recordatorios
   para ambos. En grupos no se avisa (los dos ven el chat) y el bot no responde a conversación normal.
 - Lo ahorrado en metas se calcula sumando `aportes_meta`; no se guarda.
+- `bot/consultas.py`: preguntas en lenguaje natural (Claude elige filtros, SQL calcula en
+  `core/reportes.consultar`), foto de boleta (visión) y envíos programados: aviso de tareas a las 9:00 y
+  resumen semanal los domingos 20:00 (`envios_programados` evita duplicados).
+- Monedas USD/MXN: `core/cambio.py` baja el tipo de cambio una vez al día (open.er-api.com) y lo guarda
+  en `tipos_cambio`; `monto_base` queda en CLP.
+- Tareas de la casa con turnos (`tareas`), menú semanal generado por Claude con ingredientes a la lista.
+- En grupos: /panel fija accesos directos; el bot conversa solo si lo nombran ("pimpollo") o le responden.
+  Requiere privacy mode desactivado en BotFather.
 
 ## Personalidad del bot
 "Pimpollo": amigo chileno buena onda. Modismos suaves (wena, cachai, al tiro, pucha), frases cortas,

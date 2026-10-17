@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import secrets
 from datetime import date
 from html import escape
 
@@ -9,7 +10,7 @@ from telegram import Bot, Update
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from bot import comun, plata
+from bot import comun, interprete, plata
 from bot.comun import boton, teclado
 from core import finanzas, hogar, metas, parser
 from core.finanzas import formatear_clp
@@ -342,6 +343,134 @@ async def cmd_notas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text("\n".join(lineas), parse_mode="HTML", reply_markup=teclado(*filas))
 
 
+# ---------- tareas de la casa ----------
+
+def _cuando_tarea(proxima: date) -> str:
+    dias = (proxima - finanzas.hoy()).days
+    if dias < 0:
+        return f"⚠️ atrasada {-dias} día{'s' if dias != -1 else ''}"
+    return comun.formatear_fecha(proxima)
+
+
+async def _crear_tareas(update: Update, context, usuario: dict, tareas: list[dict]) -> None:
+    pareja = finanzas.otro_usuario(usuario["id"])
+    for t in tareas:
+        quien = t["quien"] if pareja else "yo"
+        responsable = pareja if quien == "pareja" else usuario
+        tarea_id = hogar.crear_tarea(t["nombre"], t["cada_dias"], responsable["id"], quien == "turnos",
+                                     finanzas.hoy(), usuario["id"])
+        modo = (f"por turnos (parte {escape(comun.primer_nombre(responsable))})" if quien == "turnos"
+                else f"la hace {escape(comun.primer_nombre(responsable))}")
+        frecuencia = "todos los días" if t["cada_dias"] == 1 else f"cada {t['cada_dias']} días"
+        await update.effective_message.reply_text(
+            f"🧹 Tarea creada: <b>{escape(t['nombre'])}</b>\n🔁 {frecuencia} · {modo}\n"
+            "Les aviso a las 9:00 el día que toca 😉", parse_mode="HTML",
+            reply_markup=teclado([boton("📋 Ver tareas", "tarea:ver"), boton("↩️ Deshacer", f"borrar:tarea:{tarea_id}")]))
+
+
+async def cmd_tareas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await comun.usuario_o_aviso(update) is None:
+        return
+    tareas = hogar.listar_tareas()
+    if not tareas:
+        await update.effective_message.reply_text(
+            "🧹 No hay tareas.\nCrea una: <i>la basura se saca cada 3 días, nos turnamos</i>", parse_mode="HTML")
+        return
+    lineas = ["🧹 <b>Tareas de la casa</b>", ""]
+    filas = []
+    for t in tareas:
+        lineas.append(f"<b>{escape(t['nombre'])}</b> · le toca a {escape(t['responsable'].split()[0])} · "
+                      f"{_cuando_tarea(t['proxima'])}")
+        filas.append([boton(f"✅ {t['nombre'][:30]}", f"tarea:hecha:{t['id']}"), boton("🗑️", f"borrar:tarea:{t['id']}")])
+    await update.effective_message.reply_text("\n".join(lineas), parse_mode="HTML", reply_markup=teclado(*filas))
+
+
+async def _tarea_hecha(update: Update, context, usuario: dict, tarea_id: int) -> None:
+    tarea = hogar.marcar_tarea_hecha(tarea_id, usuario["id"], finanzas.hoy())
+    if tarea is None:
+        await update.effective_message.reply_text("🤔 Esa tarea ya no existe.")
+        return
+    siguiente = f"Próxima: {comun.formatear_fecha(tarea['proxima'])}, le toca a {escape(tarea['responsable'].split()[0])}"
+    await update.effective_message.reply_text(f"✅ ¡Bien ahí! <b>{escape(tarea['nombre'])}</b> lista 💪\n{siguiente}",
+                                              parse_mode="HTML")
+    await comun.avisar_pareja(context.bot, update, usuario,
+                              f"🔔 <b>{escape(comun.primer_nombre(usuario))}</b> hizo: {escape(tarea['nombre'])} ✅\n{siguiente}")
+
+
+async def cb_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    usuario = await comun.usuario_de_boton(query)
+    if usuario is None:
+        return
+    await query.answer()
+    partes = query.data.split(":")
+    if partes[1] == "ver":
+        await cmd_tareas(update, context)
+    else:
+        await _tarea_hecha(update, context, usuario, int(partes[2]))
+
+
+async def avisar_tareas_del_dia(bot: Bot) -> None:
+    """Le avisa a cada responsable las tareas que le tocan hoy (o están atrasadas)."""
+    hoy = finanzas.hoy()
+    for t in await asyncio.to_thread(hogar.listar_tareas):
+        if t["proxima"] > hoy:
+            continue
+        try:
+            await bot.send_message(
+                t["responsable_telegram_id"],
+                f"🧹 Hoy te toca: <b>{escape(t['nombre'])}</b> ({_cuando_tarea(t['proxima'])})",
+                parse_mode="HTML", reply_markup=teclado([boton("✅ ¡Listo!", f"tarea:hecha:{t['id']}")]))
+        except TelegramError:
+            log.warning("No pude avisar la tarea %s", t["id"])
+
+
+# ---------- menú semanal ----------
+
+def _menus(context) -> dict:
+    return context.bot_data.setdefault("menus", {})
+
+
+async def _menu_semanal(update: Update, context, preferencias: str, mensaje=None) -> None:
+    if not comun.es_grupo(update):
+        await update.effective_chat.send_action("typing")
+    try:
+        menu = await interprete.generar_menu(preferencias)
+    except interprete.ErrorInterprete as e:
+        await update.effective_message.reply_text(str(e))
+        return
+    mid = secrets.token_hex(4)
+    _menus(context)[mid] = {"ingredientes": menu["ingredientes"], "preferencias": preferencias}
+    lineas = ["🍽️ <b>Menú de la semana</b>" + (f" ({escape(preferencias)})" if preferencias else ""), ""]
+    lineas += [f"<b>{escape(p['dia'])}:</b> {escape(p['plato'])}" for p in menu["platos"]]
+    lineas += ["", f"🛒 {len(menu['ingredientes'])} ingredientes para comprar", "", escape(menu["comentario"])]
+    await update.effective_message.reply_text(
+        "\n".join(lineas), parse_mode="HTML",
+        reply_markup=teclado([boton("🛒 Agregar ingredientes a la lista", f"menu:lista:{mid}")],
+                             [boton("🔄 Otro menú", f"menu:otro:{mid}")]))
+
+
+async def cb_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    usuario = await comun.usuario_de_boton(query)
+    if usuario is None:
+        return
+    _, accion, mid = query.data.split(":")
+    menu = _menus(context).get(mid)
+    if menu is None:
+        await query.answer("Ese menú ya caducó, pide otro 🙏", show_alert=True)
+        return
+    await query.answer()
+    if accion == "otro":
+        await _menu_semanal(update, context, menu["preferencias"])
+        return
+    _menus(context).pop(mid)
+    hogar.agregar_items([(i["nombre"], i["cantidad"]) for i in menu["ingredientes"]], usuario["id"])
+    await query.edit_message_reply_markup(reply_markup=None)
+    await query.message.reply_text(f"🛒 Agregué {len(menu['ingredientes'])} ingredientes a la lista 👌",
+                                   reply_markup=teclado([boton("📋 Ver lista", "lista:ver")]))
+
+
 # ---------- deshacer / borrar genérico ----------
 
 async def cb_borrar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -363,6 +492,8 @@ async def cb_borrar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ok = hogar.borrar_panoramas(ids) > 0
     elif tipo == "nota":
         ok = hogar.borrar_nota(ids[0])
+    elif tipo == "tarea":
+        ok = hogar.borrar_tarea(ids[0])
     else:
         ok = False
     if ok:
@@ -401,6 +532,15 @@ async def manejar_intencion(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await _guardar_notas(update, usuario, datos["notas"])
     elif intencion == "nota_buscar":
         await _buscar_notas(update, datos["busqueda"] or update.message.text)
+    elif intencion == "tarea_nueva":
+        await _crear_tareas(update, context, usuario, datos["tareas"])
+    elif intencion == "ver_tareas":
+        await cmd_tareas(update, context)
+    elif intencion == "tarea_hecha":
+        tarea = next(t for t in hogar.listar_tareas() if t["nombre"] == datos["busqueda"])
+        await _tarea_hecha(update, context, usuario, tarea["id"])
+    elif intencion == "menu_semanal":
+        await _menu_semanal(update, context, datos["busqueda"])
     else:
         return False
     return True

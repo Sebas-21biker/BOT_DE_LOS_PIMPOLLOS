@@ -156,6 +156,57 @@ def borrar_panoramas(ids: list[int]) -> int:
         return conn.execute("DELETE FROM panoramas WHERE id = ANY(%s)", (ids,)).rowcount
 
 
+# ---------- tareas de la casa ----------
+
+
+def crear_tarea(nombre: str, cada_dias: int, responsable_id: int, rotar: bool, proxima, creado_por: int) -> int:
+    with conectar() as conn:
+        return conn.execute(
+            """
+            INSERT INTO tareas (nombre, cada_dias, responsable_id, rotar, proxima, creado_por)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+            """,
+            (nombre, cada_dias, responsable_id, rotar, proxima, creado_por),
+        ).fetchone()["id"]
+
+
+def listar_tareas() -> list[dict]:
+    with conectar() as conn:
+        return conn.execute(
+            """
+            SELECT t.id, t.nombre, t.cada_dias, t.rotar, t.proxima, t.responsable_id,
+                   u.nombre AS responsable, u.telegram_id AS responsable_telegram_id
+            FROM tareas t JOIN usuarios u ON u.id = t.responsable_id
+            WHERE t.activa ORDER BY t.proxima, t.id
+            """
+        ).fetchall()
+
+
+def marcar_tarea_hecha(tarea_id: int, usuario_id: int, hoy) -> dict | None:
+    """Registra que se hizo, programa la próxima y pasa el turno si se turnan. Devuelve la tarea actualizada."""
+    with conectar() as conn:
+        return conn.execute(
+            """
+            UPDATE tareas t SET
+                ultimo_hecho_por = %(yo)s,
+                ultimo_hecho_en = NOW(),
+                proxima = %(hoy)s::date + t.cada_dias,
+                responsable_id = CASE WHEN t.rotar THEN
+                    COALESCE((SELECT id FROM usuarios WHERE id <> %(yo)s ORDER BY id LIMIT 1), t.responsable_id)
+                    ELSE t.responsable_id END
+            WHERE t.id = %(id)s AND t.activa
+            RETURNING t.id, t.nombre, t.proxima, t.rotar,
+                      (SELECT nombre FROM usuarios WHERE id = t.responsable_id) AS responsable
+            """,
+            {"yo": usuario_id, "hoy": hoy, "id": tarea_id},
+        ).fetchone()
+
+
+def borrar_tarea(tarea_id: int) -> bool:
+    with conectar() as conn:
+        return conn.execute("DELETE FROM tareas WHERE id = %s", (tarea_id,)).rowcount > 0
+
+
 # ---------- envíos programados ----------
 
 

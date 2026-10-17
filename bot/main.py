@@ -16,6 +16,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, Con
 
 from bot import comun, consultas, hogar, interprete, plata
 from core import config, db, finanzas, metas
+from core import hogar as hogar_core
 from dashboard import web as dashboard_web
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
@@ -35,7 +36,7 @@ AYUDA = (
     "❓ <i>¿cuánto gastamos en uber este año?</i> · <i>¿en qué gastamos más este mes?</i>\n"
     "📷 Mándame la foto de una boleta y la anoto\n\n"
     "📋 <b>Comandos</b>\n"
-    "/panel · /saldo · /resumen · /semana · /metas · /lista · /recordatorios · /panoramas · /notas · /dashboard\n"
+    "/panel · /saldo · /resumen · /semana · /metas · /tareas · /menu · /lista · /recordatorios · /panoramas · /notas · /dashboard\n"
     "/gasto, /ingreso y /pague para anotar rápido sin IA\n\n"
     "🧪 Si escribes <b>test</b> en un gasto o pago, lo anoto como prueba (no cuenta). "
     "Los borras con /borrar_pruebas"
@@ -79,7 +80,8 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         [comun.boton("🛒 Lista", "panel:lista"), comun.boton("🎯 Metas", "panel:metas")],
         [comun.boton("⚖️ Saldo", "panel:saldo"), comun.boton("📊 Resumen", "panel:resumen")],
         [comun.boton("⏰ Recordatorios", "panel:recordatorios"), comun.boton("📍 Panoramas", "panel:panoramas")],
-        [comun.boton("📌 Notas", "panel:notas"), comun.boton("🎲 ¿Qué hacemos?", "pan:sort:cualquiera")],
+        [comun.boton("🧹 Tareas", "panel:tareas"), comun.boton("📌 Notas", "panel:notas")],
+        [comun.boton("🍽️ Menú semanal", "panel:menu"), comun.boton("🎲 ¿Qué hacemos?", "pan:sort:cualquiera")],
     ]
     if boton := _boton_dashboard(update, context):
         filas.insert(0, [boton])
@@ -96,13 +98,21 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 "(o fíjalo tú: mantén presionado el mensaje → Fijar).")
 
 
+async def _cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/menu [preferencias] — menú de cenas de la semana con lista de ingredientes."""
+    if await comun.usuario_o_aviso(update) is None:
+        return
+    await hogar._menu_semanal(update, context, " ".join(context.args or []))
+
+
 async def cb_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if await comun.usuario_de_boton(query) is None:
         return
     await query.answer()
     vistas = {"lista": hogar.cmd_lista, "metas": hogar.cmd_metas, "saldo": plata.saldo, "resumen": plata.resumen,
-              "recordatorios": hogar.cmd_recordatorios, "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas}
+              "recordatorios": hogar.cmd_recordatorios, "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas,
+              "tareas": hogar.cmd_tareas, "menu": _cmd_menu}
     await vistas[query.data.split(":")[1]](update, context)
 
 
@@ -144,7 +154,7 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         datos = await interprete.interpretar(
             comun.sin_marca_prueba(texto), finanzas.ahora(),
             finanzas.nombres_categorias("gasto"), finanzas.nombres_categorias("ingreso"),
-            [m["nombre"] for m in metas.listar()],
+            [m["nombre"] for m in metas.listar()], [t["nombre"] for t in hogar_core.listar_tareas()],
             anterior=anterior, contexto=contexto,
         )
     except interprete.ErrorInterprete as e:
@@ -178,6 +188,8 @@ COMANDOS = [
     BotCommand("recordatorios", "Próximos recordatorios"),
     BotCommand("panoramas", "Panoramas pendientes"),
     BotCommand("notas", "Datos de la casa"),
+    BotCommand("tareas", "Tareas de la casa y turnos"),
+    BotCommand("menu", "Menú de la semana"),
     BotCommand("pague", "Anotar que le pagaste a tu pareja"),
     BotCommand("gasto", "Registro rápido de gasto"),
     BotCommand("ingreso", "Registro rápido de ingreso"),
@@ -206,6 +218,7 @@ def _crear_app() -> Application:
         "saldo": plata.saldo, "resumen": plata.resumen, "borrar_pruebas": plata.borrar_pruebas,
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
         "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas, "semana": consultas.cmd_semana,
+        "tareas": hogar.cmd_tareas, "menu": _cmd_menu,
     }
 
     app = Application.builder().token(config.telegram_bot_token()).build()
@@ -220,6 +233,8 @@ def _crear_app() -> Application:
     app.add_handler(CallbackQueryHandler(hogar.cb_panorama, pattern=r"^pan:"))
     app.add_handler(CallbackQueryHandler(hogar.cb_borrar, pattern=r"^borrar:"))
     app.add_handler(CallbackQueryHandler(cb_panel, pattern=r"^panel:"))
+    app.add_handler(CallbackQueryHandler(hogar.cb_tarea, pattern=r"^tarea:"))
+    app.add_handler(CallbackQueryHandler(hogar.cb_menu, pattern=r"^menu:"))
     return app
 
 

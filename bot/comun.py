@@ -10,7 +10,7 @@ from telegram import Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from telegram.constants import ChatType
 from telegram.error import TelegramError
 
-from core import finanzas
+from core import cambio, finanzas
 from core.finanzas import formatear_clp
 
 log = logging.getLogger(__name__)
@@ -99,13 +99,28 @@ def texto_saldo() -> str:
     return f"⚖️ {escape(deudor['nombre'])} le debe {formatear_clp(acreedor['balance'])} a {escape(acreedor['nombre'])}"
 
 
+def formatear_monto(monto: Decimal, moneda: str) -> str:
+    if moneda == "CLP":
+        return formatear_clp(monto)
+    if moneda == "USD":
+        return "US$" + f"{monto:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".").removesuffix(",00")
+    return formatear_clp(monto) + f" {moneda}"
+
+
+def monto_clp(mov: dict) -> Decimal:
+    """Monto del movimiento convertido a CLP con el tipo de cambio de hoy (solo para mostrar)."""
+    return mov["monto"] * cambio.tasa(mov["moneda"], finanzas.hoy())
+
+
 def describir_movimiento(mov: dict, usuario: dict, pareja: dict | None) -> str:
     """Texto de un movimiento para mostrar al usuario (HTML)."""
     categoria = finanzas.categoria_por_nombre(mov["categoria"], mov["tipo"])
     signo = "💸" if mov["tipo"] == "gasto" else "💰"
+    titulo = f"{signo} <b>{'Gasto' if mov['tipo'] == 'gasto' else 'Ingreso'} de {formatear_monto(mov['monto'], mov['moneda'])}</b>"
+    if mov["moneda"] != "CLP":
+        titulo += f" (≈ {formatear_clp(monto_clp(mov))})"
     lineas = [
-        f"{signo} <b>{'Gasto' if mov['tipo'] == 'gasto' else 'Ingreso'} de {formatear_clp(mov['monto'])}</b>"
-        + (f" {mov['moneda']}" if mov["moneda"] != "CLP" else ""),
+        titulo,
         f"{categoria['emoji']} {escape(categoria['nombre'])} · {formatear_fecha(mov['fecha'])}",
     ]
     if mov["descripcion"]:
@@ -115,7 +130,7 @@ def describir_movimiento(mov: dict, usuario: dict, pareja: dict | None) -> str:
         nombre_pareja = escape(pareja["nombre"]) if pareja else "tu pareja"
         pct_pareja = Decimal(100) - pct
         lineas.append(f"👥 Compartido: {escape(primer_nombre(usuario))} {pct:g}% · {nombre_pareja} {pct_pareja:g}% "
-                      f"({nombre_pareja} debe {formatear_clp(mov['monto'] * pct_pareja / 100)})")
+                      f"({nombre_pareja} debe {formatear_clp(monto_clp(mov) * pct_pareja / 100)})")
     elif mov["tipo"] == "gasto":
         lineas.append(f"👤 Individual, pagado por {escape(usuario['nombre'])}")
     else:
@@ -147,8 +162,11 @@ def guardar_movimiento(mov: dict, usuario: dict, pareja: dict | None, mensaje_or
 
 def problema_movimientos(movimientos: list[dict], pareja: dict | None) -> str | None:
     """Motivo por el que no se pueden guardar estos movimientos, o None si están OK."""
-    if any(m["moneda"] != "CLP" for m in movimientos):
-        return "Pucha, por ahora solo anoto en pesos chilenos. Dólares y pesos mexicanos vienen pronto ✈️"
+    try:
+        for m in movimientos:
+            cambio.tasa(m["moneda"], finanzas.hoy())
+    except cambio.SinTipoDeCambio:
+        return "Pucha, no pude conseguir el tipo de cambio ahora. Intenta en un rato 🙏"
     if any(m["porcentaje_pagador"] is not None for m in movimientos) and pareja is None:
         return "Tu pareja todavía no se registra (tiene que tirar un /start), así que aún no puedo dividir gastos 🤷"
     return None

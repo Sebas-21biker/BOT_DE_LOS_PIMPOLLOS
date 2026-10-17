@@ -134,8 +134,8 @@ async def botones_propuesta(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def _avisar_compartidos(context, update: Update, usuario: dict, movimientos: list[dict]) -> None:
     lineas = [f"🔔 <b>{escape(primer_nombre(usuario))}</b> anotó un gasto compartido:"]
     for m in movimientos:
-        tu_parte = m["monto"] * (100 - m["porcentaje_pagador"]) / 100
-        lineas.append(f"• {escape(m['descripcion'] or m['categoria'])}: {formatear_clp(m['monto'])} "
+        tu_parte = comun.monto_clp(m) * (100 - m["porcentaje_pagador"]) / 100
+        lineas.append(f"• {escape(m['descripcion'] or m['categoria'])}: {comun.formatear_monto(m['monto'], m['moneda'])} "
                       f"→ te toca {formatear_clp(tu_parte)}")
     lineas += ["", comun.texto_saldo()]
     await comun.avisar_pareja(context.bot, update, usuario, "\n".join(lineas))
