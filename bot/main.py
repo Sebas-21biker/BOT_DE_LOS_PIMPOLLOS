@@ -106,6 +106,14 @@ async def cb_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ---------- texto libre ----------
 
+def _le_hablan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """En un grupo: ¿el mensaje nombra al bot o responde a un mensaje suyo?"""
+    texto = (update.message.text or "").lower()
+    respuesta_a = update.message.reply_to_message
+    return ("pimpollo" in texto or f"@{context.bot.username.lower()}" in texto
+            or (respuesta_a is not None and respuesta_a.from_user.id == context.bot.id))
+
+
 async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     usuario = await comun.usuario_o_aviso(update)
     if usuario is None:
@@ -147,8 +155,8 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await plata.proponer(update, context, usuario, datos, mensaje_original, prueba)
     elif await hogar.manejar_intencion(update, context, usuario, datos):
         pass
-    elif grupo:
-        return  # en el grupo no se responde a la conversación normal
+    elif grupo and not _le_hablan(update, context):
+        return  # en el grupo solo conversa si lo nombran o le responden
     elif intencion == "consulta":
         await update.message.reply_text(
             "Pronto voy a poder cachar ese tipo de preguntas 🤓. Por mientras, tira /saldo, /resumen o /dashboard.")
