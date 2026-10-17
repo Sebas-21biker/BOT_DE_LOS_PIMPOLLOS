@@ -27,5 +27,13 @@ def database_url() -> str:
     return _requerida("DATABASE_URL")
 
 
+def anthropic_api_key() -> str:
+    return _requerida("ANTHROPIC_API_KEY")
+
+
+def claude_model() -> str:
+    return os.getenv("CLAUDE_MODEL", "").strip() or "claude-opus-5-5"
+
+
 def database_configurada() -> bool:
     return bool(os.getenv("DATABASE_URL", "").strip())
