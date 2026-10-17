@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes
 
 from bot import comun, interprete, plata
 from bot.comun import boton, teclado
-from core import finanzas, hogar, metas, parser
+from core import finanzas, hogar, metas, parser, perfil
 from core.finanzas import formatear_clp
 
 log = logging.getLogger(__name__)
@@ -188,6 +188,12 @@ async def _agregar_compras(update: Update, usuario: dict, compras: list[dict]) -
 
 # ---------- recordatorios ----------
 
+def _cuando(momento) -> str:
+    """'mañana a las 08:00' / 'el domingo 1 de noviembre a las 09:00'."""
+    texto = comun.formatear_fecha_hora(momento)
+    return texto if texto.startswith(("hoy", "mañana")) else f"el {texto}"
+
+
 async def _crear_recordatorios(update: Update, context, usuario: dict, recordatorios: list[dict]) -> None:
     ahora = finanzas.ahora()
     for r in recordatorios:
@@ -200,7 +206,7 @@ async def _crear_recordatorios(update: Update, context, usuario: dict, recordato
         repite = f" ({REPETIR_TEXTO[r['repetir']]})" if r["repetir"] != "nunca" else ""
         quien = "👥 Para los dos" if para is None else "👤 Solo para ti"
         await update.effective_message.reply_text(
-            f"⏰ Listo, aviso el {comun.formatear_fecha_hora(r['fecha_hora'])}{repite}\n"
+            f"⏰ Listo, aviso {_cuando(r['fecha_hora'])}{repite}\n"
             f"📝 {escape(r['texto'])}\n{quien}",
             parse_mode="HTML", reply_markup=teclado([boton("↩️ Deshacer", f"borrar:rec:{rec_id}")]))
         if para is None:
@@ -494,6 +500,8 @@ async def cb_borrar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ok = hogar.borrar_nota(ids[0])
     elif tipo == "tarea":
         ok = hogar.borrar_tarea(ids[0])
+    elif tipo == "perfil":
+        ok = sum(perfil.borrar(i) for i in ids) > 0
     else:
         ok = False
     if ok:
@@ -558,8 +566,8 @@ async def manejar_esperando(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return None
 
     if esperando["tipo"] == "meta_nueva":
-        return {"contexto": "El bot le pidió al usuario los datos de una meta de ahorro nueva; "
-                            "interpreta el mensaje como meta_nueva."}
+        return {"contexto": "El bot le pidió al usuario los datos de una meta de ahorro nueva.",
+                "intencion": "meta_nueva"}
 
     if esperando["tipo"] == "aporte":
         meta = metas.obtener(esperando["meta_id"])

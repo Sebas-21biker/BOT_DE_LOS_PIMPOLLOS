@@ -75,8 +75,13 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 
 ## Estructura del bot
 - `bot/main.py`: arranque (bot + dashboard + bucle de recordatorios) y ruteo del texto libre.
-- `bot/interprete.py`: Claude clasifica la intención (movimientos, pago_pareja, metas, compras,
-  recordatorios, panoramas, notas, consulta, otro) y extrae los datos con un JSON schema.
+- `bot/interprete.py`: interpretación en DOS pasos: (1) Claude elige la intención (schema mínimo),
+  (2) extrae solo los campos de esa intención (`_CAMPOS_POR_INTENCION`). Un schema único con todo superó
+  el límite de gramática de structured outputs; al agregar intenciones, sumar su campo ahí.
+  Las correcciones saltan el paso 1. Las instrucciones (system) se cachean.
+- `bot/pareja.py`: /invitar (link de un solo uso para registrar a la pareja, máx. 2 usuarios), perfil
+  (gustos, comidas, sueños, horarios, amigos, deportes...) e ideas personalizadas generadas con el perfil.
+- Autorización: ALLOWED_TELEGRAM_IDS + usuarios registrados (filtro dinámico en `bot/main.py`).
 - `bot/plata.py`: gastos/ingresos/pagos (con Confirmar/Corregir), /saldo, /resumen, /pague, avisos.
 - `bot/hogar.py`: metas, lista de compras, recordatorios, panoramas y notas de la casa.
 - `bot/comun.py`: utilidades compartidas.

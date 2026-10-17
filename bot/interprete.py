@@ -27,12 +27,14 @@ def _client() -> anthropic.AsyncAnthropic:
 
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+CATEGORIAS_PERFIL = ["gustos", "comida", "suenos", "trabajo", "amigos", "deportes", "regalos", "musica", "otro"]
 TIPOS_PANORAMA = ["restaurante", "lugar", "pelicula", "serie", "actividad", "viaje", "otro"]
 INTENCIONES = [
     "movimientos", "pago_pareja", "meta_nueva", "meta_aporte", "ver_metas",
     "compras_agregar", "ver_lista", "recordatorio", "ver_recordatorios",
     "panorama_agregar", "panorama_sugerir", "nota_guardar", "nota_buscar",
     "tarea_nueva", "ver_tareas", "tarea_hecha", "menu_semanal",
+    "perfil_guardar", "perfil_ver", "pedir_ideas",
     "consulta", "otro",
 ]
 
@@ -40,7 +42,8 @@ SISTEMA = """Eres el intérprete de "Pimpollo", el bot de una pareja en Chile. R
 español chileno y los conviertes en datos estructurados. Quien escribe es "el usuario"; la otra persona \
 de la pareja es "la pareja".
 
-Elige UNA intención y llena solo su lista; deja las demás listas vacías.
+Cada mensaje tiene UNA intención. Se trabaja en dos pasos: primero se te pide solo la intención y luego los
+datos de esa intención.
 
 1. movimientos: gastos o ingresos de plata. Un mensaje puede traer varios (uno por monto).
    - Quien escribe es quien pagó el gasto o recibió el ingreso.
@@ -102,7 +105,23 @@ Elige UNA intención y llena solo su lista; deja las demás listas vacías.
     tareas activas listadas; si no calza ninguna, intencion = "otro" y pregunta cuál.
 18. menu_semanal: pide ideas de comidas o un menú para la semana. busqueda = preferencias mencionadas
     ("vegetariano", "rápido", "barato", "solo 3 días") o "".
-19. otro: cualquier otra cosa (saludos, conversación).
+19. perfil_guardar: datos sobre las personas para conocerse y sorprenderse: gustos, comidas favoritas,
+    sueños, horario de trabajo, amigos, deportes, música, ideas de regalo ("a la Cami le encanta el sushi",
+    "mi horario es de 9 a 18", "nuestros amigos son Juan y Pedro", "sueño con ir a Japón", "juego pádel
+    los martes"). Un ítem por dato. sobre: "yo" (quien escribe), "pareja" o "ambos" (de los dos, ej: amigos en
+    común, sueños compartidos). categoria: gustos/comida/suenos/trabajo/amigos/deportes/regalos/musica/otro.
+    dato: frase corta y clara en tercera persona sin el nombre ("le encanta el sushi", "trabaja de 9 a 18");
+    si es de los dos, en plural ("sueñan con ir a Japón", "sus amigos son Juan y la Fran").
+    Ojo: datos prácticos de la casa (wifi, contactos, códigos) son nota_guardar, no perfil.
+20. perfil_ver: preguntan qué saben de alguien ("¿qué le gusta a la Cami?", "¿cuál es mi horario?",
+    "¿qué sueños tenemos?"). Llena perfil_filtro: sobre (yo/pareja/ambos/todos) y categoria (o "todas").
+    "¿Qué le gusta a X?" o "¿qué sabes de X?" van con categoria "todas" (los gustos están repartidos en
+    comida, deportes, música...); usa una categoría solo si preguntan por algo específico (horario, sueños).
+21. pedir_ideas: piden que les RECOMIENDES algo nuevo: una cita, un regalo, un panorama para el finde, una
+    sorpresa ("recomiéndanos algo para el sábado", "ideas de regalo para la Cami", "¿qué podríamos hacer
+    distinto?"). busqueda = qué tipo de idea piden, con los detalles (presupuesto, para quién, cuándo).
+    (Si en cambio preguntan qué hacer de lo que YA tienen anotado, es panorama_sugerir.)
+22. otro: cualquier otra cosa (saludos, conversación).
 
 Imágenes: si viene una foto de una boleta, voucher o comprobante, la intención es movimientos con UN solo
 gasto por el TOTAL pagado (no cada ítem): descripcion = comercio (y qué se compró, breve), fecha = la de la
@@ -130,62 +149,119 @@ def _obj(propiedades: dict) -> dict:
             "additionalProperties": False}
 
 
-def _schema(categorias: list[str]) -> dict:
-    texto = {"type": "string"}
-    numero = {"type": "number"}
-    return _obj({
-        "intencion": {"type": "string", "enum": INTENCIONES},
+_TEXTO = {"type": "string"}
+_NUMERO = {"type": "number"}
+_FECHA = {"type": "string", "format": "date"}
+
+
+def _campos(categorias: list[str]) -> dict:
+    """Los datos que se pueden extraer, por campo. Cada intención usa solo los suyos (ver _CAMPOS_POR_INTENCION)."""
+    return {
         "movimientos": {"type": "array", "items": _obj({
             "tipo": {"type": "string", "enum": ["gasto", "ingreso"]},
-            "monto": numero,
+            "monto": _NUMERO,
             "moneda": {"type": "string", "enum": ["CLP", "USD", "MXN"]},
             "categoria": {"type": "string", "enum": categorias},
-            "descripcion": texto,
-            "fecha": {"type": "string", "format": "date"},
+            "descripcion": _TEXTO,
+            "fecha": _FECHA,
             "compartido": {"type": "boolean"},
-            "porcentaje_pagador": numero,
+            "porcentaje_pagador": _NUMERO,
         })},
         "pagos": {"type": "array", "items": _obj({
-            "monto": numero,
+            "monto": _NUMERO,
             "direccion": {"type": "string", "enum": ["yo_pago", "me_pagan"]},
-            "fecha": {"type": "string", "format": "date"},
+            "fecha": _FECHA,
         })},
         "metas_nuevas": {"type": "array", "items": _obj({
-            "nombre": texto, "emoji": texto, "monto_objetivo": numero, "fecha_objetivo": texto,
+            "nombre": _TEXTO, "emoji": _TEXTO, "monto_objetivo": _NUMERO, "fecha_objetivo": _TEXTO,
         })},
-        "aportes": {"type": "array", "items": _obj({"meta": texto, "monto": numero})},
-        "compras": {"type": "array", "items": _obj({"nombre": texto, "cantidad": texto})},
+        "aportes": {"type": "array", "items": _obj({"meta": _TEXTO, "monto": _NUMERO})},
+        "compras": {"type": "array", "items": _obj({"nombre": _TEXTO, "cantidad": _TEXTO})},
         "recordatorios": {"type": "array", "items": _obj({
-            "texto": texto,
-            "fecha_hora": texto,
+            "texto": _TEXTO,
+            "fecha_hora": _TEXTO,
             "repetir": {"type": "string", "enum": ["nunca", "diario", "semanal", "mensual", "anual"]},
             "para": {"type": "string", "enum": ["yo", "ambos"]},
         })},
         "panoramas": {"type": "array", "items": _obj({
-            "titulo": texto, "tipo": {"type": "string", "enum": TIPOS_PANORAMA}, "notas": texto,
+            "titulo": _TEXTO, "tipo": {"type": "string", "enum": TIPOS_PANORAMA}, "notas": _TEXTO,
         })},
-        "notas": {"type": "array", "items": _obj({"clave": texto, "valor": texto})},
+        "notas": {"type": "array", "items": _obj({"clave": _TEXTO, "valor": _TEXTO})},
         "filtro_tipo": {"type": "string", "enum": TIPOS_PANORAMA + ["cualquiera"]},
-        "busqueda": texto,
+        "busqueda": _TEXTO,
+        "perfil": {"type": "array", "items": _obj({
+            "sobre": {"type": "string", "enum": ["yo", "pareja", "ambos"]},
+            "categoria": {"type": "string", "enum": CATEGORIAS_PERFIL},
+            "dato": _TEXTO,
+        })},
+        "perfil_filtro": _obj({
+            "sobre": {"type": "string", "enum": ["yo", "pareja", "ambos", "todos"]},
+            "categoria": {"type": "string", "enum": CATEGORIAS_PERFIL + ["todas"]},
+        }),
         "tareas": {"type": "array", "items": _obj({
-            "nombre": texto, "cada_dias": {"type": "integer"},
+            "nombre": _TEXTO, "cada_dias": {"type": "integer"},
             "quien": {"type": "string", "enum": ["turnos", "yo", "pareja"]},
         })},
         "consulta": _obj({
             "metrica": {"type": "string", "enum": ["gastos", "ingresos"]},
-            "desde": {"type": "string", "format": "date"},
-            "hasta": {"type": "string", "format": "date"},
+            "desde": _FECHA,
+            "hasta": _FECHA,
             "categoria": {"type": "string", "enum": categorias + ["todas"]},
             "persona": {"type": "string", "enum": ["ambos", "yo", "pareja"]},
             "agrupar": {"type": "string", "enum": ["nada", "categoria", "mes", "persona", "descripcion"]},
-            "busqueda": texto,
+            "busqueda": _TEXTO,
         }),
-        "respuesta": texto,
-    })
+        "respuesta": _TEXTO,
+    }
+
+
+# Paso 2: qué campos extrae cada intención. Las que no están aquí (ver_lista, ver_metas...) no necesitan datos.
+_CAMPOS_POR_INTENCION = {
+    "movimientos": ["movimientos"], "pago_pareja": ["pagos"], "meta_nueva": ["metas_nuevas"],
+    "meta_aporte": ["aportes"], "compras_agregar": ["compras"], "recordatorio": ["recordatorios"],
+    "panorama_agregar": ["panoramas"], "panorama_sugerir": ["filtro_tipo"], "nota_guardar": ["notas"],
+    "nota_buscar": ["busqueda"], "tarea_nueva": ["tareas"], "tarea_hecha": ["busqueda"],
+    "menu_semanal": ["busqueda"], "perfil_guardar": ["perfil"], "perfil_ver": ["perfil_filtro"],
+    "pedir_ideas": ["busqueda"], "consulta": ["consulta"], "otro": ["respuesta"],
+}
+
+# Valores por defecto de los campos que una intención no extrae (así el resto del bot no tiene que preguntar).
+_VACIO = {
+    "movimientos": [], "pagos": [], "metas_nuevas": [], "aportes": [], "compras": [], "recordatorios": [],
+    "panoramas": [], "notas": [], "perfil": [], "tareas": [], "filtro_tipo": "cualquiera", "busqueda": "",
+    "respuesta": "", "perfil_filtro": {"sobre": "todos", "categoria": "todas"},
+    "consulta": {"metrica": "gastos", "desde": "", "hasta": "", "categoria": "todas", "persona": "ambos",
+                 "agrupar": "nada", "busqueda": ""},
+}
 
 
 class ErrorInterprete(Exception):
     pass
+
+
+async def _llamar(sistema: str, mensajes: list[dict], schema: dict) -> dict:
+    modelo = config.claude_model()
+    extra = {}
+    if not modelo.startswith("claude-haiku"):
+        # Si el modelo rechaza por política, la API reintenta con un modelo de respaldo.
+        extra = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+    try:
+        respuesta = await _client().beta.messages.create(
+            model=modelo,
+            max_tokens=4000,
+            # Las instrucciones son iguales en los dos pasos: se cachean.
+            system=[{"type": "text", "text": sistema, "cache_control": {"type": "ephemeral"}}],
+            messages=mensajes,
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+            **extra,
+        )
+    except anthropic.APIError as e:
+        log.exception("Error llamando a Claude")
+        raise ErrorInterprete("Pucha, no pude conectarme con la IA. Intenta de nuevo en un rato 🙏") from e
+    if respuesta.stop_reason != "end_turn":
+        log.warning("Respuesta de Claude con stop_reason=%s", respuesta.stop_reason)
+        raise ErrorInterprete("No logré cachar el mensaje. Prueba escribirlo de otra forma 🤔")
+    return json.loads(next(b.text for b in respuesta.content if b.type == "text"))
 
 
 async def interpretar(
@@ -198,11 +274,14 @@ async def interpretar(
     anterior: tuple[str, str] | None = None,
     contexto: str | None = None,
     imagen: bytes | None = None,
+    intencion: str | None = None,
 ) -> dict:
-    """Devuelve el JSON de Claude ya validado, más "crudo" (el JSON original, para correcciones).
+    """Interpreta en dos pasos: (1) la intención, (2) los datos de esa intención con un schema chico.
 
-    `anterior` = (mensaje_original, crudo_previo) cuando `mensaje` es una corrección.
-    `contexto` = pista extra cuando el bot le hizo una pregunta al usuario (ej: está creando una meta).
+    Devuelve todos los campos (los que no aplican, vacíos) ya validados, más "crudo" (el JSON del paso 2,
+    para correcciones).
+    `anterior` = (mensaje_original, crudo_previo) cuando `mensaje` es una corrección (se salta el paso 1).
+    `contexto` = pista extra cuando el bot le hizo una pregunta al usuario. `intencion` = forzarla.
     """
     sistema = SISTEMA.format(gastos=", ".join(categorias_gasto), ingresos=", ".join(categorias_ingreso))
     encabezado = (f"Ahora: {DIAS[ahora.weekday()]} {ahora:%Y-%m-%d %H:%M} (hora de Chile).\n"
@@ -210,9 +289,11 @@ async def interpretar(
                   f"Tareas activas: {', '.join(tareas_activas) or 'ninguna'}.\n")
     if contexto:
         encabezado += f"Contexto: {contexto}\n"
+
     if anterior:
         original, previa = anterior
-        mensajes = [
+        intencion = json.loads(previa).get("intencion", "movimientos")
+        base = [
             {"role": "user", "content": f"{encabezado}Mensaje: {original}"},
             {"role": "assistant", "content": previa},
             {"role": "user", "content": f"Corrección del usuario: {mensaje}"},
@@ -225,37 +306,38 @@ async def interpretar(
                                              "data": base64.standard_b64encode(imagen).decode()}},
                 {"type": "text", "text": contenido},
             ]
-        mensajes = [{"role": "user", "content": contenido}]
+        base = [{"role": "user", "content": contenido}]
 
-    modelo = config.claude_model()
-    extra = {}
-    if not modelo.startswith("claude-haiku"):
-        # Si el modelo rechaza por política, la API reintenta con un modelo de respaldo.
-        extra = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+    # Paso 1: solo la intención.
+    if intencion is None:
+        paso1 = await _llamar(sistema, base, _obj({"intencion": {"type": "string", "enum": INTENCIONES}}))
+        intencion = paso1["intencion"]
 
-    try:
-        respuesta = await _client().beta.messages.create(
-            model=modelo,
-            max_tokens=4000,
-            system=sistema,
-            messages=mensajes,
-            output_config={
-                "effort": "low",
-                "format": {"type": "json_schema", "schema": _schema(categorias_gasto + categorias_ingreso)},
-            },
-            **extra,
-        )
-    except anthropic.APIError as e:
-        log.exception("Error llamando a Claude")
-        raise ErrorInterprete("Pucha, no pude conectarme con la IA. Intenta de nuevo en un rato 🙏") from e
+    # Paso 2: los datos de esa intención.
+    datos = {**{k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
+                for k, v in _VACIO.items()}, "intencion": intencion, "crudo": json.dumps({"intencion": intencion})}
+    campos = _CAMPOS_POR_INTENCION.get(intencion)
+    if campos:
+        todos = _campos(categorias_gasto + categorias_ingreso)
+        schema = _obj({"intencion": {"type": "string", "enum": sorted({intencion, "otro"})},
+                       **{c: todos[c] for c in campos}, "respuesta": _TEXTO})
+        instruccion = (f"La intención es {intencion}. Extrae sus datos según las reglas. Si al final no "
+                       "corresponde (falta información clave), usa intencion \"otro\" y explica en respuesta.")
+        if anterior:
+            mensajes = base[:-1] + [{"role": "user", "content": f"{base[-1]['content']}\n\n{instruccion}"}]
+        elif imagen is not None:
+            mensajes = [{"role": "user", "content": base[0]["content"] + [{"type": "text", "text": instruccion}]}]
+        else:
+            mensajes = [{"role": "user", "content": f"{base[0]['content']}\n\n{instruccion}"}]
+        extraido = await _llamar(sistema, mensajes, schema)
+        datos.update(extraido)
+        datos["crudo"] = json.dumps(extraido, ensure_ascii=False)
 
-    if respuesta.stop_reason != "end_turn":
-        log.warning("Respuesta de Claude con stop_reason=%s", respuesta.stop_reason)
-        raise ErrorInterprete("No logré cachar el mensaje. Prueba escribirlo de otra forma 🤔")
+    return _validar(datos, ahora, categorias_gasto, categorias_ingreso, metas_activas, tareas_activas)
 
-    texto = next(b.text for b in respuesta.content if b.type == "text")
-    datos = json.loads(texto)
-    datos["crudo"] = texto
+
+def _validar(datos: dict, ahora: datetime, categorias_gasto: list[str], categorias_ingreso: list[str],
+             metas_activas: list[str], tareas_activas: list[str]) -> dict:
     hoy = ahora.date()
     datos["movimientos"] = [_validar_movimiento(m, categorias_gasto, categorias_ingreso, hoy)
                             for m in datos["movimientos"]]
@@ -264,6 +346,7 @@ async def interpretar(
     datos["aportes"] = [{"meta": a["meta"], "monto": _monto(a["monto"])} for a in datos["aportes"]
                         if a["meta"] in metas_activas]
     datos["recordatorios"] = [_validar_recordatorio(r, ahora) for r in datos["recordatorios"]]
+    datos["tareas"] = [t for t in datos["tareas"] if t["cada_dias"] > 0]
     c = datos["consulta"]
     c["desde"] = _fecha(c["desde"], hoy.replace(day=1))
     c["hasta"] = _fecha(c["hasta"], hoy)
@@ -273,8 +356,8 @@ async def interpretar(
     # Si la intención quedó sin datos, se trata como conversación.
     requeridos = {"movimientos": "movimientos", "pago_pareja": "pagos", "meta_nueva": "metas_nuevas",
                   "meta_aporte": "aportes", "compras_agregar": "compras", "recordatorio": "recordatorios",
-                  "panorama_agregar": "panoramas", "nota_guardar": "notas", "tarea_nueva": "tareas"}
-    datos["tareas"] = [t for t in datos["tareas"] if t["cada_dias"] > 0]
+                  "panorama_agregar": "panoramas", "nota_guardar": "notas", "tarea_nueva": "tareas",
+                  "perfil_guardar": "perfil"}
     lista = requeridos.get(datos["intencion"])
     if lista and not datos[lista]:
         datos["intencion"] = "otro"
@@ -377,4 +460,40 @@ async def generar_menu(preferencias: str) -> dict:
         raise ErrorInterprete("Pucha, no pude armar el menú ahora. Intenta en un rato 🙏") from e
     if respuesta.stop_reason != "end_turn":
         raise ErrorInterprete("No me salió el menú, pídemelo de nuevo 🙏")
+    return json.loads(next(b.text for b in respuesta.content if b.type == "text"))
+
+
+IDEAS_SISTEMA = """Eres "Pimpollo", amigo chileno buena onda de una pareja que vive en Chile. Te piden ideas (citas,
+regalos, panoramas, sorpresas). Usa lo que sabes de ellos (su perfil, panoramas pendientes) para que las ideas
+sean personales, concretas y realistas en Chile, considerando la fecha/estación. Propón entre 3 y 5 ideas
+distintas entre sí (alguna barata o gratis si no dicen presupuesto). titulo corto; descripcion de 1 a 2 frases
+diciendo por qué les calza (menciona el gusto o dato que usaste); tipo según la lista. No inventes datos de ellos
+que no estén en el contexto. Nunca tomes partido ni juzgues. comentario: frase corta con modismos chilenos suaves
+y máximo un emoji."""
+
+
+async def generar_ideas(pedido: str, contexto: str) -> dict:
+    """{"ideas": [{titulo, tipo, descripcion}], "comentario"} pensadas con el perfil de la pareja."""
+    schema = _obj({
+        "ideas": {"type": "array", "items": _obj({
+            "titulo": {"type": "string"},
+            "tipo": {"type": "string", "enum": TIPOS_PANORAMA},
+            "descripcion": {"type": "string"},
+        })},
+        "comentario": {"type": "string"},
+    })
+    try:
+        respuesta = await _client().messages.create(
+            model=config.claude_model(),
+            max_tokens=4000,
+            system=IDEAS_SISTEMA,
+            messages=[{"role": "user",
+                       "content": f"{contexto}\n\nLo que piden: {pedido or 'ideas para hacer juntos'}"}],
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+        )
+    except anthropic.APIError as e:
+        log.exception("Error generando ideas")
+        raise ErrorInterprete("Pucha, no se me ocurrió nada ahora. Intenta en un rato 🙏") from e
+    if respuesta.stop_reason != "end_turn":
+        raise ErrorInterprete("No me salieron las ideas, pídemelas de nuevo 🙏")
     return json.loads(next(b.text for b in respuesta.content if b.type == "text"))

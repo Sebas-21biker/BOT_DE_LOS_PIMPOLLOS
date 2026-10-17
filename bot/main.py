@@ -14,7 +14,7 @@ from telegram.error import TelegramError
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           filters)
 
-from bot import comun, consultas, hogar, interprete, plata
+from bot import comun, consultas, hogar, interprete, pareja, plata
 from core import config, db, finanzas, metas
 from core import hogar as hogar_core
 from dashboard import web as dashboard_web
@@ -34,9 +34,12 @@ AYUDA = (
     "📍 <i>anota el restaurante Liguria para ir</i> · <i>¿qué hacemos hoy?</i>\n"
     "📌 <i>la clave del wifi es pimpollo123</i> · <i>¿cuál era la clave del wifi?</i>\n"
     "❓ <i>¿cuánto gastamos en uber este año?</i> · <i>¿en qué gastamos más este mes?</i>\n"
+    "💝 <i>a la Cami le encanta el sushi</i> · <i>¿qué le gusta a la Cami?</i>\n"
+    "💡 <i>recomiéndanos algo para el sábado</i> · <i>ideas de regalo para la Cami</i>\n"
     "📷 Mándame la foto de una boleta y la anoto\n\n"
     "📋 <b>Comandos</b>\n"
-    "/panel · /saldo · /resumen · /semana · /metas · /tareas · /menu · /lista · /recordatorios · /panoramas · /notas · /dashboard\n"
+    "/panel · /dashboard · /saldo · /resumen · /semana · /metas · /lista · /tareas · /menu\n"
+    "/recordatorios · /panoramas · /notas · /perfil · /ideas · /invitar\n"
     "/gasto, /ingreso y /pague para anotar rápido sin IA\n\n"
     "🧪 Si escribes <b>test</b> en un gasto o pago, lo anoto como prueba (no cuenta). "
     "Los borras con /borrar_pruebas"
@@ -45,9 +48,32 @@ AYUDA = (
 
 # ---------- comandos generales ----------
 
+# Quiénes pueden usar el bot: ALLOWED_TELEGRAM_IDS + usuarios registrados (se amplía al aceptar una invitación).
+AUTORIZADOS = filters.User(allow_empty=True)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Registro: abierto solo para ALLOWED_TELEGRAM_IDS o con un link de invitación válido."""
     usuario_tg = update.effective_user
-    usuario = db.registrar_usuario(usuario_tg.id, usuario_tg.first_name)
+    usuario = finanzas.obtener_usuario(usuario_tg.id)
+    if usuario is None and usuario_tg.id in config.allowed_telegram_ids():
+        usuario = db.registrar_usuario(usuario_tg.id, usuario_tg.first_name)
+    elif usuario is None and context.args and context.args[0].startswith("inv_"):
+        resultado = db.usar_invitacion(context.args[0].removeprefix("inv_"), usuario_tg.id, usuario_tg.first_name)
+        if resultado is None:
+            await update.message.reply_text("🙈 Ese link ya se usó o venció. Pídele uno nuevo a tu pareja con /invitar")
+            return
+        usuario, invito = resultado
+        AUTORIZADOS.add_user_ids(usuario_tg.id)
+        try:
+            await context.bot.send_message(
+                invito["telegram_id"],
+                f"🎉 <b>{escape(usuario['nombre'])}</b> se unió a Pimpollo. ¡Ya están los dos! 🐣", parse_mode="HTML")
+        except TelegramError:
+            pass
+    if usuario is None:
+        await update.message.reply_text("🙅 Este bot es privado. Si tu pareja lo usa, pídele un link con /invitar")
+        return
     await update.message.reply_text(f"¡Wena {escape(usuario['nombre'])}! Ya quedaste registrado 🐣\n\n{AYUDA}",
                                     parse_mode="HTML")
 
@@ -82,6 +108,7 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         [comun.boton("⏰ Recordatorios", "panel:recordatorios"), comun.boton("📍 Panoramas", "panel:panoramas")],
         [comun.boton("🧹 Tareas", "panel:tareas"), comun.boton("📌 Notas", "panel:notas")],
         [comun.boton("🍽️ Menú semanal", "panel:menu"), comun.boton("🎲 ¿Qué hacemos?", "pan:sort:cualquiera")],
+        [comun.boton("💝 Perfil", "panel:perfil"), comun.boton("💡 Ideas para nosotros", "panel:ideas")],
     ]
     if boton := _boton_dashboard(update, context):
         filas.insert(0, [boton])
@@ -112,7 +139,8 @@ async def cb_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer()
     vistas = {"lista": hogar.cmd_lista, "metas": hogar.cmd_metas, "saldo": plata.saldo, "resumen": plata.resumen,
               "recordatorios": hogar.cmd_recordatorios, "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas,
-              "tareas": hogar.cmd_tareas, "menu": _cmd_menu}
+              "tareas": hogar.cmd_tareas, "menu": _cmd_menu,
+              "perfil": pareja.cmd_perfil, "ideas": pareja.cmd_ideas}
     await vistas[query.data.split(":")[1]](update, context)
 
 
@@ -134,12 +162,12 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     grupo = comun.es_grupo(update)
 
     # ¿Responde a una pregunta del bot (monto de un aporte, total de la compra...)?
-    contexto = None
+    contexto = intencion_forzada = None
     if esperando := context.user_data.pop("esperando", None):
         resultado = await hogar.manejar_esperando(update, context, usuario, esperando)
         if resultado is None:
             return
-        contexto = resultado["contexto"]
+        contexto, intencion_forzada = resultado["contexto"], resultado.get("intencion")
 
     # ¿Es la corrección de una propuesta anterior?
     prueba = comun.es_prueba(texto)
@@ -155,7 +183,7 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             comun.sin_marca_prueba(texto), finanzas.ahora(),
             finanzas.nombres_categorias("gasto"), finanzas.nombres_categorias("ingreso"),
             [m["nombre"] for m in metas.listar()], [t["nombre"] for t in hogar_core.listar_tareas()],
-            anterior=anterior, contexto=contexto,
+            anterior=anterior, contexto=contexto, intencion=intencion_forzada,
         )
     except interprete.ErrorInterprete as e:
         await update.message.reply_text(str(e))
@@ -167,6 +195,12 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await plata.proponer(update, context, usuario, datos, mensaje_original, prueba)
     elif await hogar.manejar_intencion(update, context, usuario, datos):
         pass
+    elif intencion == "perfil_guardar":
+        await pareja.guardar_perfil(update, usuario, datos["perfil"])
+    elif intencion == "perfil_ver":
+        await pareja.ver_perfil(update, usuario, datos["perfil_filtro"])
+    elif intencion == "pedir_ideas":
+        await pareja.pedir_ideas(update, context, usuario, datos["busqueda"])
     elif intencion == "consulta":
         await consultas.responder_consulta(update, usuario, datos["consulta"], texto)
     elif grupo and not _le_hablan(update, context):
@@ -190,6 +224,9 @@ COMANDOS = [
     BotCommand("notas", "Datos de la casa"),
     BotCommand("tareas", "Tareas de la casa y turnos"),
     BotCommand("menu", "Menú de la semana"),
+    BotCommand("perfil", "Lo que el bot sabe de ustedes"),
+    BotCommand("ideas", "Ideas de citas, regalos y panoramas"),
+    BotCommand("invitar", "Link para que tu pareja se una"),
     BotCommand("pague", "Anotar que le pagaste a tu pareja"),
     BotCommand("gasto", "Registro rápido de gasto"),
     BotCommand("ingreso", "Registro rápido de ingreso"),
@@ -211,9 +248,10 @@ async def _configurar_menu(app: Application) -> None:
 
 
 def _crear_app() -> Application:
-    autorizados = filters.User(user_id=config.allowed_telegram_ids())
+    AUTORIZADOS.add_user_ids(config.allowed_telegram_ids() | db.telegram_ids_registrados())
+    autorizados = AUTORIZADOS
     comandos = {
-        "start": start, "ayuda": ayuda, "dashboard": dashboard, "panel": panel,
+        "ayuda": ayuda, "invitar": pareja.cmd_invitar, "perfil": pareja.cmd_perfil, "ideas": pareja.cmd_ideas, "dashboard": dashboard, "panel": panel,
         "gasto": plata.gasto, "ingreso": plata.ingreso, "pague": plata.pague,
         "saldo": plata.saldo, "resumen": plata.resumen, "borrar_pruebas": plata.borrar_pruebas,
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
@@ -222,6 +260,7 @@ def _crear_app() -> Application:
     }
 
     app = Application.builder().token(config.telegram_bot_token()).build()
+    app.add_handler(CommandHandler("start", start))  # abierto: valida invitaciones
     for nombre, handler in comandos.items():
         app.add_handler(CommandHandler(nombre, handler, filters=autorizados))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & autorizados, texto_libre))
@@ -235,6 +274,7 @@ def _crear_app() -> Application:
     app.add_handler(CallbackQueryHandler(cb_panel, pattern=r"^panel:"))
     app.add_handler(CallbackQueryHandler(hogar.cb_tarea, pattern=r"^tarea:"))
     app.add_handler(CallbackQueryHandler(hogar.cb_menu, pattern=r"^menu:"))
+    app.add_handler(CallbackQueryHandler(pareja.cb_idea, pattern=r"^idea:"))
     return app
 
 

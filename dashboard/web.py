@@ -64,7 +64,7 @@ async def _autenticar(request: web.Request, handler):
         return await handler(request)
     encabezado = request.headers.get("Authorization", "")
     usuario_tg = validar_init_data(encabezado.removeprefix("tma "), config.telegram_bot_token())
-    if usuario_tg is None or usuario_tg.get("id") not in config.allowed_telegram_ids():
+    if usuario_tg is None:
         raise web.HTTPUnauthorized(text="No autorizado")
     usuario = await asyncio.to_thread(finanzas.obtener_usuario, usuario_tg["id"])
     if usuario is None:
