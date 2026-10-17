@@ -3,6 +3,7 @@
 Claude solo traduce texto a datos; no calcula totales ni saldos.
 """
 
+import base64
 import json
 import logging
 from datetime import date, datetime, time
@@ -77,8 +78,26 @@ Elige UNA intención y llena solo su lista; deja las demás listas vacías.
 12. nota_guardar: guardar un dato de la casa ("la clave del wifi es X", "mi talla de zapatos es 38").
     clave corta en minúsculas ("clave wifi", "talla zapatos rishi"), valor tal cual.
 13. nota_buscar: preguntan por un dato guardado ("¿cuál era la clave del wifi?"). busqueda = palabras clave.
-14. consulta: preguntas sobre sus finanzas (cuánto gastamos, cuánto debo...).
+14. consulta: preguntas sobre sus gastos o ingresos ("¿cuánto gastamos en uber este año?", "¿en qué
+    gastamos más este mes?", "¿cuánto gasté yo en comida la semana pasada?"). Llena el objeto consulta:
+    - metrica: "gastos" o "ingresos".
+    - desde / hasta: YYYY-MM-DD (inclusive). "este mes" = día 1 del mes hasta hoy; "este año" = 1 de enero
+      hasta hoy; "la semana pasada" = lunes a domingo anteriores. Si no dice periodo, usa este mes.
+    - categoria: una de la lista o "todas".
+    - persona: "yo" si pregunta por lo suyo ("gasté", "mis"), "pareja" si por la otra persona, "ambos" si
+      habla en plural o no especifica.
+    - agrupar: "categoria" (en qué gastamos más), "mes" (por mes), "persona" (quién gastó más),
+      "descripcion" (en qué cosas específicas) o "nada" (solo el total).
+    - busqueda: palabra(s) para filtrar por descripción ("uber", "sushi") o "" si no aplica. Si la palabra
+      ya corresponde a una categoría completa (ej: "transporte"), usa categoria y deja busqueda vacía.
+    Para las demás intenciones llena consulta igual con valores neutros (no se usará).
+    Preguntas sobre quién le debe a quién también son consulta con metrica "gastos" y agrupar "nada".
 15. otro: cualquier otra cosa (saludos, conversación).
+
+Imágenes: si viene una foto de una boleta, voucher o comprobante, la intención es movimientos con UN solo
+gasto por el TOTAL pagado (no cada ítem): descripcion = comercio (y qué se compró, breve), fecha = la de la
+boleta si se lee, categoria según el comercio. El texto que acompaña la foto puede decir "a medias", etc.
+Si la imagen no es una boleta ni comprobante, intencion = "otro" y en respuesta dilo con buena onda.
 
 Fechas: interpreta "hoy", "ayer", "mañana", "el sábado", etc. respecto de la fecha y hora actuales que vienen
 en el mensaje. Para movimientos y pagos, si no se menciona fecha usa hoy.
@@ -138,6 +157,15 @@ def _schema(categorias: list[str]) -> dict:
         "notas": {"type": "array", "items": _obj({"clave": texto, "valor": texto})},
         "filtro_tipo": {"type": "string", "enum": TIPOS_PANORAMA + ["cualquiera"]},
         "busqueda": texto,
+        "consulta": _obj({
+            "metrica": {"type": "string", "enum": ["gastos", "ingresos"]},
+            "desde": {"type": "string", "format": "date"},
+            "hasta": {"type": "string", "format": "date"},
+            "categoria": {"type": "string", "enum": categorias + ["todas"]},
+            "persona": {"type": "string", "enum": ["ambos", "yo", "pareja"]},
+            "agrupar": {"type": "string", "enum": ["nada", "categoria", "mes", "persona", "descripcion"]},
+            "busqueda": texto,
+        }),
         "respuesta": texto,
     })
 
@@ -154,6 +182,7 @@ async def interpretar(
     metas_activas: list[str],
     anterior: tuple[str, str] | None = None,
     contexto: str | None = None,
+    imagen: bytes | None = None,
 ) -> dict:
     """Devuelve el JSON de Claude ya validado, más "crudo" (el JSON original, para correcciones).
 
@@ -173,7 +202,14 @@ async def interpretar(
             {"role": "user", "content": f"Corrección del usuario: {mensaje}"},
         ]
     else:
-        mensajes = [{"role": "user", "content": f"{encabezado}Mensaje: {mensaje}"}]
+        contenido = f"{encabezado}Mensaje: {mensaje}"
+        if imagen is not None:
+            contenido = [
+                {"type": "image", "source": {"type": "base64", "media_type": _tipo_imagen(imagen),
+                                             "data": base64.standard_b64encode(imagen).decode()}},
+                {"type": "text", "text": contenido},
+            ]
+        mensajes = [{"role": "user", "content": contenido}]
 
     modelo = config.claude_model()
     extra = {}
@@ -212,6 +248,11 @@ async def interpretar(
     datos["aportes"] = [{"meta": a["meta"], "monto": _monto(a["monto"])} for a in datos["aportes"]
                         if a["meta"] in metas_activas]
     datos["recordatorios"] = [_validar_recordatorio(r, ahora) for r in datos["recordatorios"]]
+    c = datos["consulta"]
+    c["desde"] = _fecha(c["desde"], hoy.replace(day=1))
+    c["hasta"] = _fecha(c["hasta"], hoy)
+    if c["desde"] > c["hasta"]:
+        c["desde"], c["hasta"] = c["hasta"], c["desde"]
 
     # Si la intención quedó sin datos, se trata como conversación.
     requeridos = {"movimientos": "movimientos", "pago_pareja": "pagos", "meta_nueva": "metas_nuevas",
@@ -221,6 +262,14 @@ async def interpretar(
     if lista and not datos[lista]:
         datos["intencion"] = "otro"
     return datos
+
+
+def _tipo_imagen(datos: bytes) -> str:
+    if datos.startswith(b"\x89PNG"):
+        return "image/png"
+    if datos[:4] == b"RIFF" and datos[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"  # las fotos de Telegram llegan como JPEG
 
 
 def _monto(valor) -> Decimal:

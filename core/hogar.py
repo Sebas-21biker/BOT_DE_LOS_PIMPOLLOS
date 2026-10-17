@@ -156,6 +156,16 @@ def borrar_panoramas(ids: list[int]) -> int:
         return conn.execute("DELETE FROM panoramas WHERE id = ANY(%s)", (ids,)).rowcount
 
 
+# ---------- envíos programados ----------
+
+
+def reservar_envio(clave: str) -> bool:
+    """Marca un envío automático como hecho. Devuelve False si ya se había hecho (no repetir)."""
+    with conectar() as conn:
+        return conn.execute("INSERT INTO envios_programados (clave) VALUES (%s) ON CONFLICT DO NOTHING",
+                            (clave,)).rowcount > 0
+
+
 # ---------- notas de la casa ----------
 
 

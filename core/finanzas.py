@@ -26,6 +26,11 @@ def obtener_usuario(telegram_id: int) -> dict | None:
         return conn.execute("SELECT * FROM usuarios WHERE telegram_id = %s", (telegram_id,)).fetchone()
 
 
+def todos_los_usuarios() -> list[dict]:
+    with conectar() as conn:
+        return conn.execute("SELECT * FROM usuarios ORDER BY id").fetchall()
+
+
 def otro_usuario(usuario_id: int) -> dict | None:
     with conectar() as conn:
         return conn.execute("SELECT * FROM usuarios WHERE id <> %s ORDER BY id LIMIT 1", (usuario_id,)).fetchone()

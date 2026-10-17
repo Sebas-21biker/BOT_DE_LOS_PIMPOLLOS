@@ -3,7 +3,7 @@
 Visibilidad: se muestran los gastos de ambos, pero solo los ingresos propios de quien consulta.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 from core import finanzas, metas
 from core.db import conectar
@@ -16,6 +16,88 @@ _FILTRO_PERSONA = "(%(persona)s::int IS NULL OR m.pagado_por = %(persona)s::int)
 def _sumar_meses(mes: date, n: int) -> date:
     total = mes.year * 12 + mes.month - 1 + n
     return date(total // 12, total % 12 + 1, 1)
+
+
+_AGRUPACIONES = {
+    "categoria": "COALESCE(c.emoji || ' ', '') || COALESCE(c.nombre, 'Sin categoría')",
+    "mes": "to_char(date_trunc('month', m.fecha), 'YYYY-MM')",
+    "persona": "u.nombre",
+    "descripcion": "lower(COALESCE(m.descripcion, c.nombre, '—'))",
+}
+
+
+def consultar(usuario_id: int, pareja_id: int | None, metrica: str, desde: date, hasta: date,
+              categoria: str | None, persona: str, agrupar: str, busqueda: str) -> dict:
+    """Responde una pregunta sobre gastos/ingresos con SQL. Nunca incluye movimientos de prueba.
+
+    Los ingresos solo se consultan para quien pregunta (son privados).
+    """
+    if metrica == "ingresos":
+        personas = [usuario_id]
+    elif persona == "yo":
+        personas = [usuario_id]
+    elif persona == "pareja":
+        personas = [pareja_id] if pareja_id else []
+    else:
+        personas = None
+    palabras = [f"%{p}%" for p in busqueda.lower().split() if len(p) >= 3] if busqueda else []
+    p = {
+        "tipo": "gasto" if metrica == "gastos" else "ingreso",
+        "desde": desde, "hasta": hasta,
+        "categoria": categoria,
+        "personas": personas,
+        "palabras": palabras or None,
+    }
+    filtro = """
+        FROM movimientos m
+        JOIN usuarios u ON u.id = m.pagado_por
+        LEFT JOIN categorias c ON c.id = m.categoria_id
+        WHERE m.tipo = %(tipo)s AND NOT m.es_prueba
+          AND m.fecha BETWEEN %(desde)s AND %(hasta)s
+          AND (%(categoria)s::text IS NULL OR c.nombre = %(categoria)s::text)
+          AND (%(personas)s::int[] IS NULL OR m.pagado_por = ANY(%(personas)s::int[]))
+          AND (%(palabras)s::text[] IS NULL OR m.descripcion ILIKE ANY(%(palabras)s::text[]))
+    """
+    with conectar() as conn:
+        total = conn.execute(f"SELECT COALESCE(SUM(m.monto_base), 0) AS total, COUNT(*) AS cantidad {filtro}",
+                             p).fetchone()
+        grupos = []
+        if agrupar in _AGRUPACIONES:
+            orden = "grupo" if agrupar == "mes" else "total DESC"
+            grupos = conn.execute(
+                f"SELECT {_AGRUPACIONES[agrupar]} AS grupo, SUM(m.monto_base) AS total, COUNT(*) AS cantidad "
+                f"{filtro} GROUP BY 1 ORDER BY {orden} LIMIT 12", p).fetchall()
+    return {"total": total["total"], "cantidad": total["cantidad"], "grupos": grupos}
+
+
+def resumen_semanal(usuario_id: int, hasta: date) -> dict:
+    """Datos para el resumen del domingo: semana lunes-domingo que termina en `hasta`."""
+    desde = hasta - timedelta(days=6)
+    p = {"desde": desde, "hasta": hasta, "desde_ant": desde - timedelta(days=7), "hasta_ant": desde - timedelta(days=1)}
+    with conectar() as conn:
+        totales = conn.execute(
+            """
+            SELECT COALESCE(SUM(monto_base) FILTER (WHERE fecha BETWEEN %(desde)s AND %(hasta)s), 0) AS semana,
+                   COALESCE(SUM(monto_base) FILTER (WHERE fecha BETWEEN %(desde_ant)s AND %(hasta_ant)s), 0) AS anterior
+            FROM movimientos WHERE tipo = 'gasto' AND NOT es_prueba
+            """, p).fetchone()
+        categorias = conn.execute(
+            """
+            SELECT COALESCE(c.emoji, '') AS emoji, COALESCE(c.nombre, 'Sin categoría') AS categoria,
+                   SUM(m.monto_base) AS total
+            FROM movimientos m LEFT JOIN categorias c ON c.id = m.categoria_id
+            WHERE m.tipo = 'gasto' AND NOT m.es_prueba AND m.fecha BETWEEN %(desde)s AND %(hasta)s
+            GROUP BY 1, 2 ORDER BY total DESC LIMIT 3
+            """, p).fetchall()
+        recordatorios = conn.execute(
+            """
+            SELECT texto, fecha_hora FROM recordatorios
+            WHERE NOT enviado AND fecha_hora < NOW() + interval '7 days'
+              AND (para_usuario_id IS NULL OR para_usuario_id = %(yo)s)
+            ORDER BY fecha_hora LIMIT 5
+            """, {**p, "yo": usuario_id}).fetchall()
+    return {"desde": desde, "hasta": hasta, **totales, "categorias": categorias,
+            "recordatorios": recordatorios, "metas": metas.listar()}
 
 
 def datos_dashboard(usuario_id: int, mes: date, persona_id: int | None, incluir_pruebas: bool) -> dict:

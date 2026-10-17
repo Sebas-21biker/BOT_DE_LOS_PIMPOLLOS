@@ -14,7 +14,7 @@ from telegram.error import TelegramError
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           filters)
 
-from bot import comun, hogar, interprete, plata
+from bot import comun, consultas, hogar, interprete, plata
 from core import config, db, finanzas, metas
 from dashboard import web as dashboard_web
 
@@ -31,9 +31,11 @@ AYUDA = (
     "🛒 <i>agrega leche y huevos a la lista</i>\n"
     "⏰ <i>recuérdame pagar la luz el 5 a las 10</i> · <i>el 3 de marzo es el cumple de la Cami</i>\n"
     "📍 <i>anota el restaurante Liguria para ir</i> · <i>¿qué hacemos hoy?</i>\n"
-    "📌 <i>la clave del wifi es pimpollo123</i> · <i>¿cuál era la clave del wifi?</i>\n\n"
+    "📌 <i>la clave del wifi es pimpollo123</i> · <i>¿cuál era la clave del wifi?</i>\n"
+    "❓ <i>¿cuánto gastamos en uber este año?</i> · <i>¿en qué gastamos más este mes?</i>\n"
+    "📷 Mándame la foto de una boleta y la anoto\n\n"
     "📋 <b>Comandos</b>\n"
-    "/panel · /saldo · /resumen · /metas · /lista · /recordatorios · /panoramas · /notas · /dashboard\n"
+    "/panel · /saldo · /resumen · /semana · /metas · /lista · /recordatorios · /panoramas · /notas · /dashboard\n"
     "/gasto, /ingreso y /pague para anotar rápido sin IA\n\n"
     "🧪 Si escribes <b>test</b> en un gasto o pago, lo anoto como prueba (no cuenta). "
     "Los borras con /borrar_pruebas"
@@ -155,11 +157,10 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await plata.proponer(update, context, usuario, datos, mensaje_original, prueba)
     elif await hogar.manejar_intencion(update, context, usuario, datos):
         pass
+    elif intencion == "consulta":
+        await consultas.responder_consulta(update, usuario, datos["consulta"], texto)
     elif grupo and not _le_hablan(update, context):
         return  # en el grupo solo conversa si lo nombran o le responden
-    elif intencion == "consulta":
-        await update.message.reply_text(
-            "Pronto voy a poder cachar ese tipo de preguntas 🤓. Por mientras, tira /saldo, /resumen o /dashboard.")
     else:
         await update.message.reply_text(escape(datos["respuesta"]) or "Mmm, no caché qué necesitas 🤔 Mira /ayuda",
                                         parse_mode="HTML")
@@ -171,6 +172,7 @@ COMANDOS = [
     BotCommand("panel", "Accesos directos (fíjalo en el grupo)"),
     BotCommand("saldo", "Quién le debe a quién"),
     BotCommand("resumen", "Resumen del mes"),
+    BotCommand("semana", "Resumen de la semana"),
     BotCommand("metas", "Metas de ahorro"),
     BotCommand("lista", "Lista de compras"),
     BotCommand("recordatorios", "Próximos recordatorios"),
@@ -203,13 +205,14 @@ def _crear_app() -> Application:
         "gasto": plata.gasto, "ingreso": plata.ingreso, "pague": plata.pague,
         "saldo": plata.saldo, "resumen": plata.resumen, "borrar_pruebas": plata.borrar_pruebas,
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
-        "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas,
+        "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas, "semana": consultas.cmd_semana,
     }
 
     app = Application.builder().token(config.telegram_bot_token()).build()
     for nombre, handler in comandos.items():
         app.add_handler(CommandHandler(nombre, handler, filters=autorizados))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & autorizados, texto_libre))
+    app.add_handler(MessageHandler(filters.PHOTO & autorizados, consultas.foto))
     app.add_handler(CallbackQueryHandler(plata.botones_propuesta, pattern=r"^(conf|corr|canc):[0-9a-f]+$"))
     app.add_handler(CallbackQueryHandler(plata.deshacer, pattern=r"^(deshacer|dpago):[\d,]+$"))
     app.add_handler(CallbackQueryHandler(hogar.cb_meta, pattern=r"^meta:"))
@@ -228,13 +231,15 @@ async def _correr() -> None:
         await app.start()
         await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
         runner = await dashboard_web.iniciar(config.puerto_web())
-        tarea_recordatorios = asyncio.create_task(hogar.bucle_recordatorios(app.bot))
+        tareas = [asyncio.create_task(hogar.bucle_recordatorios(app.bot)),
+                  asyncio.create_task(consultas.bucle_programados(app.bot))]
         log.info("Bot iniciado en modo polling (modelo: %s, dashboard: %s)",
                  config.claude_model(), config.dashboard_url() or "sin URL pública")
         try:
             await asyncio.Event().wait()
         finally:
-            tarea_recordatorios.cancel()
+            for tarea in tareas:
+                tarea.cancel()
             await runner.cleanup()
             await app.updater.stop()
             await app.stop()
