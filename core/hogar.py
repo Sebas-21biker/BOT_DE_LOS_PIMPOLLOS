@@ -207,6 +207,19 @@ def borrar_tarea(tarea_id: int) -> bool:
         return conn.execute("DELETE FROM tareas WHERE id = %s", (tarea_id,)).rowcount > 0
 
 
+def fechas_especiales_el(fecha) -> list[dict]:
+    """Cumpleaños/aniversarios (recordatorios anuales) que caen en `fecha` (hora de Chile)."""
+    with conectar() as conn:
+        return conn.execute(
+            """
+            SELECT id, texto, fecha_hora FROM recordatorios
+            WHERE NOT enviado AND repetir = 'anual' AND texto ~* '(cumple|aniversario)'
+              AND (fecha_hora AT TIME ZONE 'America/Santiago')::date = %s
+            """,
+            (fecha,),
+        ).fetchall()
+
+
 # ---------- envíos programados ----------
 
 
@@ -215,6 +228,12 @@ def reservar_envio(clave: str) -> bool:
     with conectar() as conn:
         return conn.execute("INSERT INTO envios_programados (clave) VALUES (%s) ON CONFLICT DO NOTHING",
                             (clave,)).rowcount > 0
+
+
+def envios_con_prefijo(prefijo: str) -> set[str]:
+    with conectar() as conn:
+        return {r["clave"] for r in conn.execute("SELECT clave FROM envios_programados WHERE clave LIKE %s",
+                                                 (prefijo + "%",))}
 
 
 # ---------- notas de la casa ----------

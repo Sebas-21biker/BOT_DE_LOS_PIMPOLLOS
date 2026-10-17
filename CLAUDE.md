@@ -82,6 +82,11 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 - `bot/pareja.py`: /invitar (link de un solo uso para registrar a la pareja, máx. 2 usuarios), perfil
   (gustos, comidas, sueños, horarios, amigos, deportes...) e ideas personalizadas generadas con el perfil.
 - Autorización: ALLOWED_TELEGRAM_IDS + usuarios registrados (filtro dinámico en `bot/main.py`).
+- Correcciones de movimientos ya guardados: intenciones editar_movimiento / borrar_movimiento y /ultimos;
+  siempre con confirmación antes → después. Solo se editan los propios (pagado_por).
+- Automáticos (`consultas.bucle_programados`): tareas 9:00, ideas anticipadas 7 días antes de
+  cumpleaños/aniversarios (recordatorios anuales; no se envían a la persona festejada), pregunta pimpolla
+  martes y viernes 20:30 (`core/preguntas.py`, respuesta → perfil), resumen semanal domingo 20:00.
 - `bot/plata.py`: gastos/ingresos/pagos (con Confirmar/Corregir), /saldo, /resumen, /pague, avisos.
 - `bot/hogar.py`: metas, lista de compras, recordatorios, panoramas y notas de la casa.
 - `bot/comun.py`: utilidades compartidas.

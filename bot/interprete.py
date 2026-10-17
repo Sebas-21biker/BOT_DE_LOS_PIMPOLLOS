@@ -493,7 +493,8 @@ regalos, panoramas, sorpresas). Usa lo que sabes de ellos (su perfil, panoramas 
 sean personales, concretas y realistas en Chile, considerando la fecha/estación. Propón entre 3 y 5 ideas
 distintas entre sí (alguna barata o gratis si no dicen presupuesto). titulo corto; descripcion de 1 a 2 frases
 diciendo por qué les calza (menciona el gusto o dato que usaste); tipo según la lista. No inventes datos de ellos
-que no estén en el contexto. Nunca tomes partido ni juzgues. comentario: frase corta con modismos chilenos suaves
+que no estén en el contexto. Si las ideas son para UNA persona (regalo, cumpleaños, sorpresa), básalas en los
+gustos de ESA persona; los datos de quien pide sirven solo como contexto. Nunca tomes partido ni juzgues. comentario: frase corta con modismos chilenos suaves
 y máximo un emoji."""
 
 

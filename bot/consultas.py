@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 
 from bot import comun, interprete, plata
 from bot import hogar as hogar_bot
+from bot import pareja
 from core import finanzas, hogar, metas, reportes
 from core.finanzas import formatear_clp
 
@@ -153,13 +154,24 @@ async def cmd_semana(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.effective_message.reply_text(texto_resumen_semanal(usuario, min(domingo, hoy)), parse_mode="HTML")
 
 
-async def bucle_programados(bot: Bot) -> None:
-    """Aviso diario de tareas (9:00) y resumen semanal los domingos desde las 20:00. Cada uno se envía una vez."""
+async def bucle_programados(app) -> None:
+    """Aviso diario de tareas (9:00), ideas anticipadas para fechas especiales (10:00), pregunta pimpolla
+    (martes y viernes 20:30) y resumen semanal (domingos 20:00). Cada uno se envía una sola vez."""
+    bot = app.bot
     while True:
         try:
             ahora = finanzas.ahora()
             if ahora.hour >= 9 and await asyncio.to_thread(hogar.reservar_envio, f"tareas-{ahora:%Y-%m-%d}"):
                 await hogar_bot.avisar_tareas_del_dia(bot)
+            if ahora.hour >= 10 and await asyncio.to_thread(hogar.reservar_envio, f"anticipos-{ahora:%Y-%m-%d}"):
+                await pareja.avisar_fechas_especiales(app)
+            if (ahora.weekday() in (1, 4) and (ahora.hour, ahora.minute) >= (20, 30)
+                    and await asyncio.to_thread(hogar.reservar_envio, f"preguntas-{ahora:%Y-%m-%d}")):
+                for usuario in await asyncio.to_thread(finanzas.todos_los_usuarios):
+                    try:
+                        await pareja.enviar_pregunta(app, usuario)
+                    except TelegramError:
+                        log.warning("No pude enviar la pregunta a %s", usuario["nombre"])
             if ahora.weekday() == 6 and ahora.hour >= 20:
                 clave = f"resumen-semanal-{ahora:%G-W%V}"
                 if await asyncio.to_thread(hogar.reservar_envio, clave):

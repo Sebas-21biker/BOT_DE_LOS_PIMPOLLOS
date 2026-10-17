@@ -39,7 +39,7 @@ AYUDA = (
     "📷 Mándame la foto de una boleta y la anoto\n\n"
     "📋 <b>Comandos</b>\n"
     "/panel · /dashboard · /ultimos · /saldo · /resumen · /semana · /metas · /lista · /tareas · /menu\n"
-    "/recordatorios · /panoramas · /notas · /perfil · /ideas · /invitar\n"
+    "/recordatorios · /panoramas · /notas · /perfil · /ideas · /pregunta · /invitar\n"
     "/gasto, /ingreso y /pague para anotar rápido sin IA\n\n"
     "🧪 Si escribes <b>test</b> en un gasto o pago, lo anoto como prueba (no cuenta). "
     "Los borras con /borrar_pruebas"
@@ -234,6 +234,7 @@ COMANDOS = [
     BotCommand("menu", "Menú de la semana"),
     BotCommand("perfil", "Lo que el bot sabe de ustedes"),
     BotCommand("ideas", "Ideas de citas, regalos y panoramas"),
+    BotCommand("pregunta", "Una pregunta para conocerse mejor"),
     BotCommand("invitar", "Link para que tu pareja se una"),
     BotCommand("pague", "Anotar que le pagaste a tu pareja"),
     BotCommand("gasto", "Registro rápido de gasto"),
@@ -259,7 +260,7 @@ def _crear_app() -> Application:
     AUTORIZADOS.add_user_ids(config.allowed_telegram_ids() | db.telegram_ids_registrados())
     autorizados = AUTORIZADOS
     comandos = {
-        "ayuda": ayuda, "invitar": pareja.cmd_invitar, "perfil": pareja.cmd_perfil, "ideas": pareja.cmd_ideas, "ultimos": plata.cmd_ultimos, "dashboard": dashboard, "panel": panel,
+        "ayuda": ayuda, "invitar": pareja.cmd_invitar, "perfil": pareja.cmd_perfil, "ideas": pareja.cmd_ideas, "ultimos": plata.cmd_ultimos, "pregunta": pareja.cmd_pregunta, "dashboard": dashboard, "panel": panel,
         "gasto": plata.gasto, "ingreso": plata.ingreso, "pague": plata.pague,
         "saldo": plata.saldo, "resumen": plata.resumen, "borrar_pruebas": plata.borrar_pruebas,
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
@@ -296,7 +297,7 @@ async def _correr() -> None:
         await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
         runner = await dashboard_web.iniciar(config.puerto_web())
         tareas = [asyncio.create_task(hogar.bucle_recordatorios(app.bot)),
-                  asyncio.create_task(consultas.bucle_programados(app.bot))]
+                  asyncio.create_task(consultas.bucle_programados(app))]
         log.info("Bot iniciado en modo polling (modelo: %s, dashboard: %s)",
                  config.claude_model(), config.dashboard_url() or "sin URL pública")
         try:

@@ -565,6 +565,14 @@ async def manejar_esperando(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.effective_message.reply_text("👌 Ya, lo dejamos ahí.")
         return None
 
+    if esperando["tipo"] == "pregunta":
+        if texto.lower() in ("saltar", "paso", "skip"):
+            await update.message.reply_text("👌 Sin drama, otro día te pregunto otra cosa.")
+            return None
+        # Pista suave: si el mensaje es claramente otra cosa (un gasto, la lista...), Claude lo trata como tal.
+        return {"contexto": f"El bot le preguntó al usuario: «{esperando['pregunta']}». Si el mensaje responde "
+                            "esa pregunta, guárdalo en su perfil (perfil_guardar); si es otra cosa, ignora esto."}
+
     if esperando["tipo"] == "editar":
         return {"contexto": f"El usuario está corrigiendo este movimiento ya guardado: {esperando['descripcion']}.",
                 "intencion": "editar_movimiento", "movimiento_id": esperando["movimiento_id"]}

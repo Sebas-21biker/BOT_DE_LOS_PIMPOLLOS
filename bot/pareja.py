@@ -1,15 +1,19 @@
 """Invitación de la pareja, perfil (gustos, sueños, horarios...) e ideas personalizadas."""
 
+import logging
 import secrets
+from datetime import timedelta
 from html import escape
 from urllib.parse import quote
 
-from telegram import InlineKeyboardButton, Update
+from telegram import ForceReply, InlineKeyboardButton, Update
 from telegram.ext import ContextTypes
 
 from bot import comun, interprete
 from bot.comun import boton, primer_nombre, teclado
-from core import db, finanzas, hogar, perfil
+from core import db, finanzas, hogar, perfil, preguntas
+
+log = logging.getLogger(__name__)
 
 EMOJI_PANORAMA = {"restaurante": "🍽️", "lugar": "📍", "pelicula": "🎬", "serie": "📺",
                   "actividad": "🎯", "viaje": "✈️", "otro": "✨"}
@@ -129,25 +133,79 @@ def _contexto_ideas(usuario: dict) -> str:
     return "\n".join(lineas)
 
 
-async def pedir_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE, usuario: dict, pedido: str) -> None:
-    if not comun.es_grupo(update):
-        await update.effective_chat.send_action("typing")
-    try:
-        resultado = await interprete.generar_ideas(pedido, _contexto_ideas(usuario))
-    except interprete.ErrorInterprete as e:
-        await update.effective_message.reply_text(str(e))
-        return
+async def armar_ideas(usuario: dict, pedido: str, bot_data: dict, titulo: str = "💡 <b>Ideas para ustedes</b>"):
+    """Genera ideas y devuelve (texto HTML, botones para guardarlas). Lanza ErrorInterprete si falla."""
+    resultado = await interprete.generar_ideas(pedido, _contexto_ideas(usuario))
     ideas = resultado["ideas"][:5]
     iid = secrets.token_hex(4)
-    context.bot_data.setdefault("ideas", {})[iid] = ideas
-    lineas = ["💡 <b>Ideas para ustedes</b>", ""]
+    bot_data.setdefault("ideas", {})[iid] = ideas
+    lineas = [titulo, ""]
     for i, idea in enumerate(ideas, 1):
         lineas.append(f"{i}. {EMOJI_PANORAMA[idea['tipo']]} <b>{escape(idea['titulo'])}</b>\n   {escape(idea['descripcion'])}")
     lineas += ["", escape(resultado["comentario"])]
     if not perfil.listar():
         lineas += ["", "<i>Tip: mientras más me cuenten de sus gustos, mejores ideas les doy 😉</i>"]
     botones = [[boton(f"📍 Guardar {i}. {idea['titulo'][:30]}", f"idea:{iid}:{i - 1}")] for i, idea in enumerate(ideas, 1)]
-    await update.effective_message.reply_text("\n".join(lineas), parse_mode="HTML", reply_markup=teclado(*botones))
+    return "\n".join(lineas), teclado(*botones)
+
+
+async def pedir_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE, usuario: dict, pedido: str) -> None:
+    if not comun.es_grupo(update):
+        await update.effective_chat.send_action("typing")
+    try:
+        texto, botones = await armar_ideas(usuario, pedido, context.bot_data)
+    except interprete.ErrorInterprete as e:
+        await update.effective_message.reply_text(str(e))
+        return
+    await update.effective_message.reply_text(texto, parse_mode="HTML", reply_markup=botones)
+
+
+# ---------- automáticos: pregunta pimpolla y fechas especiales ----------
+
+async def enviar_pregunta(app, usuario: dict) -> bool:
+    """Le manda a `usuario` una pregunta que no le haya hecho antes. Devuelve False si ya se acabaron."""
+    hechas = hogar.envios_con_prefijo(f"pregunta-{usuario['id']}-")
+    pendientes = [i for i in range(len(preguntas.PREGUNTAS)) if f"pregunta-{usuario['id']}-{i}" not in hechas]
+    if not pendientes:
+        return False
+    indice = pendientes[0]
+    hogar.reservar_envio(f"pregunta-{usuario['id']}-{indice}")
+    pregunta = preguntas.PREGUNTAS[indice]
+    app.user_data[usuario["telegram_id"]]["esperando"] = {"tipo": "pregunta", "pregunta": pregunta}
+    await app.bot.send_message(
+        usuario["telegram_id"],
+        f"💬 <b>Pregunta pimpolla</b>\n{escape(pregunta)}\n\n<i>Respóndeme normal y lo guardo en tu perfil "
+        "para darles mejores ideas (o escribe <b>saltar</b>).</i>",
+        parse_mode="HTML", reply_markup=ForceReply(input_field_placeholder="Tu respuesta…"))
+    return True
+
+
+async def cmd_pregunta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    usuario = await comun.usuario_o_aviso(update)
+    if usuario is None:
+        return
+    if not await enviar_pregunta(context.application, usuario):
+        await update.effective_message.reply_text("🙌 ¡Ya te hice todas las preguntas que tenía!")
+
+
+async def avisar_fechas_especiales(app) -> None:
+    """Una semana antes de un cumpleaños/aniversario, manda ideas de regalo en privado (sorpresa)."""
+    en_una_semana = finanzas.hoy() + timedelta(days=7)
+    for r in hogar.fechas_especiales_el(en_una_semana):
+        if not hogar.reservar_envio(f"anticipo-{r['id']}-{en_una_semana}"):
+            continue
+        texto_rec = r["texto"].lower()
+        for usuario in finanzas.todos_los_usuarios():
+            if primer_nombre(usuario).lower() in texto_rec:
+                continue  # es su cumpleaños: no se le arruina la sorpresa
+            try:
+                texto, botones = await armar_ideas(
+                    usuario, f"ideas de regalo o celebración para: {r['texto']} (es en una semana)", app.bot_data,
+                    titulo=f"🎁 <b>En una semana: {escape(r['texto'])}</b>\nIdeas para ir preparando "
+                           "(esto lo ves solo tú 🤫):")
+                await app.bot.send_message(usuario["telegram_id"], texto, parse_mode="HTML", reply_markup=botones)
+            except Exception:
+                log.exception("No pude mandar ideas anticipadas a %s", usuario["nombre"])
 
 
 async def cb_idea(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
