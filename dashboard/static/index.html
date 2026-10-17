@@ -62,6 +62,14 @@
   .lista .meta { color: var(--hint); font-size: 12px; }
   .lista .monto { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .aviso { text-align: center; color: var(--hint); padding: 40px 12px; }
+  .meta { padding: 8px 0; border-top: 1px solid var(--grid); }
+  .meta:first-child { border-top: 0; padding-top: 0; }
+  .meta .fila { display: flex; justify-content: space-between; gap: 8px; }
+  .meta .nombre { font-weight: 600; }
+  .meta .pct { font-variant-numeric: tabular-nums; color: var(--hint); }
+  .meta .barra { height: 8px; border-radius: 4px; background: var(--grid); margin: 6px 0 4px; overflow: hidden; }
+  .meta .barra > div { height: 100%; border-radius: 4px; background: var(--series-1); }
+  .meta .detalle { color: var(--hint); font-size: 13px; }
   .oculto { display: none; }
 </style>
 </head>
@@ -93,6 +101,11 @@
         <div class="valor" id="kpi-saldo"></div>
         <div class="sub" id="kpi-saldo-sub"></div>
       </div>
+    </section>
+
+    <section class="card bloque" id="bloque-metas">
+      <h2>🎯 Metas</h2>
+      <div id="metas"></div>
     </section>
 
     <section class="card bloque">
@@ -177,6 +190,15 @@ function pintar(d) {
     el("kpi-saldo").textContent = clp(d.saldo.monto);
     el("kpi-saldo-sub").textContent = `${primerNombre(d.saldo.deudor)} le debe a ${primerNombre(d.saldo.acreedor)}`;
   }
+
+  // Metas (no dependen del mes ni de la persona)
+  el("metas").innerHTML = d.metas.length
+    ? d.metas.map(m => `<div class="meta">
+        <div class="fila"><span class="nombre">${m.emoji} ${escapar(m.nombre)}</span><span class="pct">${m.porcentaje}%</span></div>
+        <div class="barra" role="progressbar" aria-valuenow="${m.porcentaje}" aria-valuemin="0" aria-valuemax="100"><div style="width:${m.porcentaje}%"></div></div>
+        <div class="detalle">${clp(m.ahorrado)} de ${clp(m.monto_objetivo)}${m.fecha_objetivo ? " · para " + nombreMes(m.fecha_objetivo) : ""}</div>
+      </div>`).join("")
+    : `<div class="vacio">Sin metas todavía. Escríbele al bot: <i>queremos juntar 2 millones para México</i></div>`;
 
   pintarCategorias(d.categorias);
   pintarSerie(d.serie);

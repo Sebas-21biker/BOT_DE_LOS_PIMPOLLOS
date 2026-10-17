@@ -73,6 +73,19 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 ## Decisiones pendientes
 - Visibilidad de ingresos individuales (por ahora /resumen muestra solo los ingresos propios)
 
+## Estructura del bot
+- `bot/main.py`: arranque (bot + dashboard + bucle de recordatorios) y ruteo del texto libre.
+- `bot/interprete.py`: Claude clasifica la intención (movimientos, pago_pareja, metas, compras,
+  recordatorios, panoramas, notas, consulta, otro) y extrae los datos con un JSON schema.
+- `bot/plata.py`: gastos/ingresos/pagos (con Confirmar/Corregir), /saldo, /resumen, /pague, avisos.
+- `bot/hogar.py`: metas, lista de compras, recordatorios, panoramas y notas de la casa.
+- `bot/comun.py`: utilidades compartidas.
+- Gastos y pagos interpretados por IA piden confirmación; lo demás (lista, recordatorios, etc.) se guarda
+  al tiro con botón Deshacer.
+- Avisos a la pareja por privado cuando hay gastos compartidos, pagos, aportes a metas o recordatorios
+  para ambos. En grupos no se avisa (los dos ven el chat) y el bot no responde a conversación normal.
+- Lo ahorrado en metas se calcula sumando `aportes_meta`; no se guarda.
+
 ## Personalidad del bot
 "Pimpollo": amigo chileno buena onda. Modismos suaves (wena, cachai, al tiro, pucha), frases cortas,
 1-2 emojis. Nunca toma partido entre la pareja ni juzga gastos. Aplica a textos fijos de `bot/main.py`

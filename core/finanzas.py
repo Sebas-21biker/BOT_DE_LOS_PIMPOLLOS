@@ -9,8 +9,12 @@ from core.db import conectar
 ZONA = ZoneInfo("America/Santiago")
 
 
+def ahora() -> datetime:
+    return datetime.now(ZONA)
+
+
 def hoy() -> date:
-    return datetime.now(ZONA).date()
+    return ahora().date()
 
 
 def formatear_clp(valor: Decimal | int | float) -> str:
@@ -84,9 +88,33 @@ def borrar_movimiento(movimiento_id: int, usuario_id: int) -> bool:
 
 
 def borrar_pruebas() -> int:
-    """Borra todos los movimientos de prueba. Devuelve cuántos borró."""
+    """Borra todos los movimientos y pagos de prueba. Devuelve cuántos borró."""
     with conectar() as conn:
-        return conn.execute("DELETE FROM movimientos WHERE es_prueba").rowcount
+        return (conn.execute("DELETE FROM movimientos WHERE es_prueba").rowcount
+                + conn.execute("DELETE FROM liquidaciones WHERE es_prueba").rowcount)
+
+
+def registrar_liquidacion(de_usuario: int, a_usuario: int, monto: Decimal, fecha: date | None,
+                          mensaje_original: str, es_prueba: bool = False) -> int:
+    """Pago entre ellos para saldar deudas (solo CLP por ahora)."""
+    with conectar() as conn:
+        return conn.execute(
+            """
+            INSERT INTO liquidaciones (de_usuario, a_usuario, monto, moneda, monto_base, tipo_cambio_usado,
+                                       fecha, mensaje_original, es_prueba)
+            VALUES (%s, %s, %s, 'CLP', %s, 1, %s, %s, %s) RETURNING id
+            """,
+            (de_usuario, a_usuario, monto, monto, fecha or hoy(), mensaje_original, es_prueba),
+        ).fetchone()["id"]
+
+
+def borrar_liquidacion(liquidacion_id: int, usuario_id: int) -> bool:
+    """Borra un pago si `usuario_id` participó en él."""
+    with conectar() as conn:
+        return conn.execute(
+            "DELETE FROM liquidaciones WHERE id = %s AND %s IN (de_usuario, a_usuario)",
+            (liquidacion_id, usuario_id),
+        ).rowcount > 0
 
 
 def balances(incluir_pruebas: bool = False) -> list[dict]:
@@ -106,9 +134,11 @@ def balances(incluir_pruebas: bool = False) -> list[dict]:
                 WHERE m.es_compartido AND m.tipo = 'gasto' AND (%(pruebas)s OR NOT m.es_prueba)
                 GROUP BY r.usuario_id
             ), liq_pagadas AS (
-                SELECT de_usuario AS usuario_id, SUM(monto_base) AS total FROM liquidaciones GROUP BY de_usuario
+                SELECT de_usuario AS usuario_id, SUM(monto_base) AS total FROM liquidaciones
+                WHERE (%(pruebas)s OR NOT es_prueba) GROUP BY de_usuario
             ), liq_recibidas AS (
-                SELECT a_usuario AS usuario_id, SUM(monto_base) AS total FROM liquidaciones GROUP BY a_usuario
+                SELECT a_usuario AS usuario_id, SUM(monto_base) AS total FROM liquidaciones
+                WHERE (%(pruebas)s OR NOT es_prueba) GROUP BY a_usuario
             )
             SELECT u.id, u.nombre,
                    COALESCE(p.total, 0) - COALESCE(c.total, 0)

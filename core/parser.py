@@ -34,6 +34,7 @@ PALABRAS_CATEGORIA = {
 }
 
 _RE_REPARTO = re.compile(r"^(\d{1,3})/(\d{1,3})$")
+_SUFIJOS_MILES = ("lucas", "luca", "mil", "k")
 _PALABRAS_COMPARTIDO = {"compartido", "compartida", "medias", "50/50"}
 
 
@@ -56,12 +57,14 @@ def normalizar(texto: str) -> str:
 
 
 def parsear_monto(token: str) -> Decimal | None:
-    """'15000', '15.000', '$15.000', '15k', '12,5' -> Decimal. None si no es un monto."""
+    """'15000', '15.000', '$15.000', '15k', '15lucas', '12,5' -> Decimal. None si no es un monto."""
     t = normalizar(token).replace("$", "")
     multiplicador = 1
-    if t.endswith(("k", "mil")):
-        multiplicador = 1000
-        t = t.removesuffix("mil").removesuffix("k")
+    for sufijo in _SUFIJOS_MILES:
+        if t.endswith(sufijo) and t != sufijo:
+            multiplicador = 1000
+            t = t.removesuffix(sufijo)
+            break
     if not t or not re.fullmatch(r"[\d.,]+", t) or not any(c.isdigit() for c in t):
         return None
     t = t.replace(".", "").replace(",", ".")  # punto = miles, coma = decimales
@@ -88,6 +91,7 @@ def interpretar(args: list[str], nombres_categorias: list[str], permitir_reparto
     moneda = "CLP"
     porcentaje_pagador = None
     resto = []
+    saltar_siguiente = False
 
     for i, token in enumerate(args):
         t = normalizar(token)
@@ -96,6 +100,12 @@ def interpretar(args: list[str], nombres_categorias: list[str], permitir_reparto
             continue  # "a medias" -> lo toma "medias"
         if monto is None and (valor := parsear_monto(token)) is not None:
             monto = valor
+            if siguiente in _SUFIJOS_MILES:  # "45 lucas", "20 mil"
+                monto *= 1000
+                saltar_siguiente = True
+                continue
+        elif saltar_siguiente:
+            saltar_siguiente = False
         elif t in MONEDAS:
             moneda = t.upper()
         elif permitir_reparto and t in _PALABRAS_COMPARTIDO:

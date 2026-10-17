@@ -5,7 +5,7 @@ Visibilidad: se muestran los gastos de ambos, pero solo los ingresos propios de 
 
 from datetime import date
 
-from core import finanzas
+from core import finanzas, metas
 from core.db import conectar
 
 # Fragmentos SQL comunes (parámetros con nombre).
@@ -104,6 +104,8 @@ def datos_dashboard(usuario_id: int, mes: date, persona_id: int | None, incluir_
             LIMIT 100
             """, p).fetchall()
 
+    metas_activas = metas.listar()
+
     saldo = None
     filas = finanzas.balances(incluir_pruebas)
     if len(filas) >= 2:
@@ -122,4 +124,5 @@ def datos_dashboard(usuario_id: int, mes: date, persona_id: int | None, incluir_
         "por_persona": por_persona,
         "movimientos": movimientos,
         "saldo": saldo,
+        "metas": metas_activas,
     }
