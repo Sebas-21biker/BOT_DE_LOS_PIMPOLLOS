@@ -89,7 +89,7 @@ def borrar_pruebas() -> int:
         return conn.execute("DELETE FROM movimientos WHERE es_prueba").rowcount
 
 
-def balances() -> list[dict]:
+def balances(incluir_pruebas: bool = False) -> list[dict]:
     """Balance de cada usuario en CLP. Positivo = le deben; negativo = debe."""
     with conectar() as conn:
         return conn.execute(
@@ -97,13 +97,13 @@ def balances() -> list[dict]:
             WITH pagado AS (
                 SELECT pagado_por AS usuario_id, SUM(monto_base) AS total
                 FROM movimientos
-                WHERE es_compartido AND tipo = 'gasto' AND NOT es_prueba
+                WHERE es_compartido AND tipo = 'gasto' AND (%(pruebas)s OR NOT es_prueba)
                 GROUP BY pagado_por
             ), cuota AS (
                 SELECT r.usuario_id, SUM(m.monto_base * r.porcentaje / 100) AS total
                 FROM repartos r
                 JOIN movimientos m ON m.id = r.movimiento_id
-                WHERE m.es_compartido AND m.tipo = 'gasto' AND NOT m.es_prueba
+                WHERE m.es_compartido AND m.tipo = 'gasto' AND (%(pruebas)s OR NOT m.es_prueba)
                 GROUP BY r.usuario_id
             ), liq_pagadas AS (
                 SELECT de_usuario AS usuario_id, SUM(monto_base) AS total FROM liquidaciones GROUP BY de_usuario
@@ -119,7 +119,8 @@ def balances() -> list[dict]:
             LEFT JOIN liq_pagadas lp ON lp.usuario_id = u.id
             LEFT JOIN liq_recibidas lr ON lr.usuario_id = u.id
             ORDER BY u.id
-            """
+            """,
+            {"pruebas": incluir_pruebas},
         ).fetchall()
 
 

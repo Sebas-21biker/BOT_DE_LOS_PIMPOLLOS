@@ -79,7 +79,14 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 y a lo que redacta Claude (prompt en `bot/interprete.py`).
 
 ## Dashboard
-Se hará como Mini App de Telegram (en vez de / antes que Streamlit).
+Mini App de Telegram (reemplaza a Streamlit). Corre en el mismo proceso que el bot (`bot/main.py`):
+- `dashboard/web.py`: servidor aiohttp en $PORT. Cada llamada a `/api/*` valida el `initData`
+  firmado por Telegram (HMAC con el token del bot) + lista blanca. Sin contraseña.
+- `dashboard/static/index.html`: página con Chart.js y colores del tema de Telegram.
+- `core/reportes.py`: consultas SQL del dashboard (gastos de ambos, ingresos solo propios).
+- URL pública: `RAILWAY_PUBLIC_DOMAIN` (o `DASHBOARD_URL`). Si existe, el bot pone el botón
+  "📊 Dashboard" junto al cuadro de texto y habilita /dashboard.
+- Toggle "Incluir pruebas" para ver movimientos 🧪.
 
 ## Forma de trabajar
 - Idioma del código: nombres en español para dominio (movimientos, categorias), inglés aceptable para lo técnico.

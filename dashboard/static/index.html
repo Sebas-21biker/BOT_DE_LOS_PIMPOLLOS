@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pimpollos · Dashboard</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: var(--tg-theme-bg-color, #fcfcfb);
+    --card: var(--tg-theme-secondary-bg-color, #f0efec);
+    --text: var(--tg-theme-text-color, #0b0b0b);
+    --hint: var(--tg-theme-hint-color, #52514e);
+    --accent: var(--tg-theme-button-color, #2a78d6);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --grid: rgba(0, 0, 0, .07);
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: var(--tg-theme-bg-color, #1a1a19);
+    --card: var(--tg-theme-secondary-bg-color, #262624);
+    --text: var(--tg-theme-text-color, #f0efec);
+    --hint: var(--tg-theme-hint-color, #c3c2b7);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --grid: rgba(255, 255, 255, .08);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px 16px 32px;
+    background: var(--bg); color: var(--text);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 4px 0 12px; }
+  h2 { font-size: 15px; margin: 0 0 10px; color: var(--hint); font-weight: 600; }
+  .filtros { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  select, .seg button {
+    font: inherit; color: var(--text); background: var(--card);
+    border: 0; border-radius: 10px; padding: 7px 10px;
+  }
+  .seg { display: flex; background: var(--card); border-radius: 10px; padding: 2px; }
+  .seg button { background: transparent; padding: 5px 10px; border-radius: 8px; cursor: pointer; }
+  .seg button.activo { background: var(--accent); color: var(--accent-text); }
+  label.prueba { display: flex; gap: 6px; align-items: center; color: var(--hint); font-size: 14px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .card { background: var(--card); border-radius: 14px; padding: 12px 14px; }
+  .kpi .etiqueta { color: var(--hint); font-size: 13px; }
+  .kpi .valor { font-size: 24px; font-weight: 700; margin: 2px 0; font-variant-numeric: tabular-nums; }
+  .kpi .sub { color: var(--hint); font-size: 13px; }
+  .bloque { margin-bottom: 12px; }
+  .vacio { color: var(--hint); font-size: 14px; padding: 8px 0; }
+  .lista { list-style: none; margin: 0; padding: 0; }
+  .lista li { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--grid); }
+  .lista li:first-child { border-top: 0; }
+  .lista .emoji { font-size: 20px; width: 26px; text-align: center; }
+  .lista .info { flex: 1; min-width: 0; }
+  .lista .desc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lista .meta { color: var(--hint); font-size: 12px; }
+  .lista .monto { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .aviso { text-align: center; color: var(--hint); padding: 40px 12px; }
+  .oculto { display: none; }
+</style>
+</head>
+<body>
+  <h1>📊 Finanzas pimpollas</h1>
+
+  <div id="aviso" class="aviso">Cargando…</div>
+
+  <main id="contenido" class="oculto">
+    <div class="filtros">
+      <select id="mes" aria-label="Mes"></select>
+      <div class="seg" id="personas" role="group" aria-label="Persona"></div>
+      <label class="prueba"><input type="checkbox" id="pruebas"> 🧪 Incluir pruebas</label>
+    </div>
+
+    <section class="kpis">
+      <div class="card kpi">
+        <div class="etiqueta" id="kpi-gastos-etiqueta">Gastos del mes</div>
+        <div class="valor" id="kpi-gastos"></div>
+        <div class="sub" id="kpi-gastos-sub"></div>
+      </div>
+      <div class="card kpi">
+        <div class="etiqueta">Tus ingresos del mes</div>
+        <div class="valor" id="kpi-ingresos"></div>
+        <div class="sub" id="kpi-ingresos-sub"></div>
+      </div>
+      <div class="card kpi">
+        <div class="etiqueta">Saldo entre ustedes</div>
+        <div class="valor" id="kpi-saldo"></div>
+        <div class="sub" id="kpi-saldo-sub"></div>
+      </div>
+    </section>
+
+    <section class="card bloque">
+      <h2>Gasto por categoría</h2>
+      <div id="cat-wrap"><canvas id="grafico-categorias"></canvas></div>
+      <div id="cat-vacio" class="vacio oculto">Sin gastos este mes.</div>
+    </section>
+
+    <section class="card bloque">
+      <h2>Últimos 12 meses</h2>
+      <div style="height: 220px"><canvas id="grafico-serie"></canvas></div>
+    </section>
+
+    <section class="card bloque">
+      <h2>Quién pagó este mes</h2>
+      <ul class="lista" id="por-persona"></ul>
+    </section>
+
+    <section class="card bloque">
+      <h2>Movimientos del mes</h2>
+      <ul class="lista" id="movimientos"></ul>
+      <div id="mov-vacio" class="vacio oculto">Nada anotado este mes todavía.</div>
+    </section>
+  </main>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+const estado = { mes: null, persona: "todos", pruebas: false };
+const graficos = {};
+
+const clp = v => "$" + Math.round(v).toLocaleString("es-CL");
+const nombreMes = iso => { const [a, m] = iso.split("-").map(Number); return `${MESES[m - 1]} ${a}`; };
+const mesCorto = iso => MESES[Number(iso.split("-")[1]) - 1].slice(0, 3);
+const primerNombre = n => n.split(" ")[0];
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const el = id => document.getElementById(id);
+const escapar = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function aviso(texto) {
+  el("aviso").textContent = texto;
+  el("aviso").classList.remove("oculto");
+  el("contenido").classList.add("oculto");
+}
+
+async function cargar() {
+  const q = new URLSearchParams({ persona: estado.persona, pruebas: estado.pruebas ? "1" : "0" });
+  if (estado.mes) q.set("mes", estado.mes.slice(0, 7));
+  const r = await fetch("/api/dashboard?" + q, { headers: { Authorization: "tma " + tg.initData } });
+  if (!r.ok) { aviso(r.status === 401 ? "No tienes acceso 🙅" : await r.text()); return; }
+  const d = await r.json();
+  estado.mes = d.mes;
+  pintar(d);
+  el("aviso").classList.add("oculto");
+  el("contenido").classList.remove("oculto");
+}
+
+function pintar(d) {
+  // Filtros
+  el("mes").innerHTML = d.meses.map(m => `<option value="${m}" ${m === d.mes ? "selected" : ""}>${nombreMes(m)}</option>`).join("");
+  const opciones = [{ id: "todos", nombre: "Ambos" }, ...d.usuarios.map(u => ({ id: String(u.id), nombre: primerNombre(u.nombre) }))];
+  el("personas").innerHTML = opciones.map(o =>
+    `<button data-id="${o.id}" class="${o.id === estado.persona ? "activo" : ""}">${escapar(o.nombre)}</button>`).join("");
+
+  // KPIs
+  const t = d.totales;
+  const quien = estado.persona === "todos" ? "" : " de " + primerNombre(d.usuarios.find(u => String(u.id) === estado.persona).nombre);
+  el("kpi-gastos-etiqueta").textContent = "Gastos del mes" + quien;
+  el("kpi-gastos").textContent = clp(t.gastos);
+  const anterior = MESES[(Number(d.mes.slice(5, 7)) + 10) % 12];
+  if (t.gastos_mes_anterior > 0) {
+    const pct = Math.round((t.gastos / t.gastos_mes_anterior - 1) * 100);
+    el("kpi-gastos-sub").textContent = `${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct)}% vs ${anterior}`;
+  } else {
+    el("kpi-gastos-sub").textContent = `Sin gastos en ${anterior}`;
+  }
+  el("kpi-ingresos").textContent = clp(t.mis_ingresos);
+  el("kpi-ingresos-sub").textContent = "🔒 Solo tú ves tus ingresos";
+  if (!d.saldo) { el("kpi-saldo").textContent = "—"; el("kpi-saldo-sub").textContent = "Falta que se registre tu pareja"; }
+  else if (d.saldo.monto === 0) { el("kpi-saldo").textContent = "A mano 🙌"; el("kpi-saldo-sub").textContent = "Nadie le debe a nadie"; }
+  else {
+    el("kpi-saldo").textContent = clp(d.saldo.monto);
+    el("kpi-saldo-sub").textContent = `${primerNombre(d.saldo.deudor)} le debe a ${primerNombre(d.saldo.acreedor)}`;
+  }
+
+  pintarCategorias(d.categorias);
+  pintarSerie(d.serie);
+
+  // Por persona
+  el("por-persona").innerHTML = d.por_persona.map(p =>
+    `<li><span class="emoji">👤</span><span class="info">${escapar(p.nombre)}</span><span class="monto">${clp(p.total)}</span></li>`).join("");
+
+  // Movimientos
+  el("mov-vacio").classList.toggle("oculto", d.movimientos.length > 0);
+  el("movimientos").innerHTML = d.movimientos.map(m => {
+    const etiquetas = [m.es_compartido ? "👥 compartido" : "", m.es_prueba ? "🧪 prueba" : ""].filter(Boolean).join(" · ");
+    const [, mm, dd] = m.fecha.split("-");
+    return `<li>
+      <span class="emoji">${m.emoji}</span>
+      <span class="info">
+        <div class="desc">${escapar(m.descripcion || m.categoria)}</div>
+        <div class="meta">${escapar(primerNombre(m.persona))} · ${Number(dd)}/${Number(mm)}${etiquetas ? " · " + etiquetas : ""}</div>
+      </span>
+      <span class="monto">${m.tipo === "ingreso" ? "+" : ""}${clp(m.monto)}</span>
+    </li>`;
+  }).join("");
+}
+
+Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+
+function opcionesBase() {
+  return {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: { callbacks: { label: c => ` ${c.dataset.label ? c.dataset.label + ": " : ""}${clp(c.parsed.x ?? c.parsed.y)}` } },
+    },
+  };
+}
+
+function pintarCategorias(cats) {
+  const vacio = cats.length === 0;
+  el("cat-vacio").classList.toggle("oculto", !vacio);
+  el("cat-wrap").classList.toggle("oculto", vacio);
+  el("cat-wrap").style.height = (cats.length * 36 + 16) + "px";
+  graficos.cat?.destroy();
+  if (vacio) return;
+  const base = opcionesBase();
+  base.plugins.tooltip.callbacks.label = c => " " + clp(c.parsed.x);
+  graficos.cat = new Chart(el("grafico-categorias"), {
+    type: "bar",
+    data: {
+      // El monto va en la etiqueta (texto), no sobre la barra.
+      labels: cats.map(c => `${c.emoji} ${c.categoria} · ${clp(c.total)}`),
+      datasets: [{ data: cats.map(c => c.total), backgroundColor: css("--series-1"),
+                   borderRadius: 4, borderSkipped: "start", maxBarThickness: 18 }],
+    },
+    options: { ...base, indexAxis: "y",
+      scales: {
+        x: { display: false, beginAtZero: true },
+        y: { grid: { display: false }, border: { display: false }, ticks: { color: css("--text"), font: { size: 13 } } },
+      } },
+  });
+}
+
+function pintarSerie(serie) {
+  graficos.serie?.destroy();
+  const base = opcionesBase();
+  base.plugins.legend = { display: true, position: "top", align: "start",
+    labels: { color: css("--text"), boxWidth: 10, boxHeight: 10, useBorderRadius: true, borderRadius: 2 } };
+  graficos.serie = new Chart(el("grafico-serie"), {
+    type: "bar",
+    data: {
+      labels: serie.map(s => mesCorto(s.mes)),
+      datasets: [
+        { label: "Gastos", data: serie.map(s => s.gastos), backgroundColor: css("--series-1"),
+          borderRadius: 4, borderSkipped: "start", maxBarThickness: 14 },
+        { label: "Tus ingresos", data: serie.map(s => s.mis_ingresos), backgroundColor: css("--series-2"),
+          borderRadius: 4, borderSkipped: "start", maxBarThickness: 14 },
+      ],
+    },
+    options: { ...base,
+      datasets: { bar: { categoryPercentage: 0.7, barPercentage: 0.9 } },
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { grid: { display: false }, border: { display: false },
+             ticks: { color: css("--hint"), maxRotation: 0, autoSkip: true, autoSkipPadding: 6 } },
+        y: { beginAtZero: true, grid: { color: css("--grid") }, border: { display: false },
+             ticks: { color: css("--hint"), maxTicksLimit: 5,
+                      callback: v => v === 0 ? "$0" : v >= 1e6 ? "$" + (v / 1e6).toLocaleString("es-CL") + "M" : "$" + Math.round(v / 1000) + "k" } },
+      } },
+  });
+}
+
+function aplicarTema() {
+  document.documentElement.dataset.theme = tg && tg.colorScheme === "dark" ? "dark" : "light";
+}
+
+if (!tg || !tg.initData) {
+  aviso("Abre el dashboard desde el bot en Telegram 📱");
+} else {
+  tg.ready();
+  tg.expand();
+  aplicarTema();
+  tg.onEvent("themeChanged", () => { aplicarTema(); cargar(); });
+  el("mes").addEventListener("change", e => { estado.mes = e.target.value; cargar(); });
+  el("personas").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    estado.persona = b.dataset.id; cargar();
+  });
+  el("pruebas").addEventListener("change", e => { estado.pruebas = e.target.checked; cargar(); });
+  cargar().catch(() => aviso("No pude cargar los datos, intenta de nuevo 🙏"));
+}
+</script>
+</body>
+</html>

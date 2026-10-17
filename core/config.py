@@ -35,5 +35,18 @@ def claude_model() -> str:
     return os.getenv("CLAUDE_MODEL", "").strip() or "claude-opus-5-5"
 
 
+def puerto_web() -> int:
+    return int(os.getenv("PORT", "8080"))
+
+
+def dashboard_url() -> str | None:
+    """URL pública HTTPS del dashboard. En Railway sale del dominio generado del servicio."""
+    url = os.getenv("DASHBOARD_URL", "").strip()
+    if url:
+        return url
+    dominio = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    return f"https://{dominio}/" if dominio else None
+
+
 def database_configurada() -> bool:
     return bool(os.getenv("DATABASE_URL", "").strip())

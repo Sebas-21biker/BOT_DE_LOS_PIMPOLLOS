@@ -3,6 +3,7 @@
 Uso: python -m bot.main
 """
 
+import asyncio
 import logging
 import re
 import secrets
@@ -10,7 +11,8 @@ from datetime import date
 from decimal import Decimal
 from html import escape
 
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonCommands,
+                      MenuButtonWebApp, Update, WebAppInfo)
 from telegram.constants import ChatAction
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           filters)
@@ -18,6 +20,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, Con
 from bot import interprete
 from core import config, db, finanzas, parser
 from core.finanzas import formatear_clp
+from dashboard import web as dashboard_web
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -342,23 +345,42 @@ async def deshacer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.answer("No lo pude borrar (ya no existe o no lo anotaste tú)", show_alert=True)
 
 
+# ---------- dashboard ----------
+
+async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    url = config.dashboard_url()
+    if not url:
+        await update.message.reply_text("El dashboard todavía no tiene dirección pública 🤷")
+        return
+    boton = InlineKeyboardMarkup([[InlineKeyboardButton("📊 Abrir dashboard", web_app=WebAppInfo(url))]])
+    await update.message.reply_text("Ahí está, ábrelo al tiro 👇", reply_markup=boton)
+
+
 # ---------- arranque ----------
 
 async def _configurar_menu(app: Application) -> None:
-    await app.bot.set_my_commands([
+    comandos = [
         BotCommand("saldo", "Quién le debe a quién"),
         BotCommand("resumen", "Resumen del mes"),
         BotCommand("gasto", "Registro rápido de gasto"),
         BotCommand("ingreso", "Registro rápido de ingreso"),
         BotCommand("borrar_pruebas", "Borrar movimientos de prueba"),
         BotCommand("ayuda", "Cómo usar el bot"),
-    ])
+    ]
+    url = config.dashboard_url()
+    if url:
+        comandos.insert(0, BotCommand("dashboard", "Ver gráficos"))
+        # Botón fijo al lado del cuadro de texto que abre la Mini App.
+        await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp("📊 Dashboard", WebAppInfo(url)))
+    else:
+        await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    await app.bot.set_my_commands(comandos)
 
 
-def main() -> None:
+def _crear_app() -> Application:
     autorizados = filters.User(user_id=config.allowed_telegram_ids())
 
-    app = Application.builder().token(config.telegram_bot_token()).post_init(_configurar_menu).build()
+    app = Application.builder().token(config.telegram_bot_token()).build()
     app.add_handler(CommandHandler("start", start, filters=autorizados))
     app.add_handler(CommandHandler("ayuda", ayuda, filters=autorizados))
     app.add_handler(CommandHandler("gasto", gasto, filters=autorizados))
@@ -366,12 +388,36 @@ def main() -> None:
     app.add_handler(CommandHandler("saldo", saldo, filters=autorizados))
     app.add_handler(CommandHandler("resumen", resumen, filters=autorizados))
     app.add_handler(CommandHandler("borrar_pruebas", borrar_pruebas, filters=autorizados))
+    app.add_handler(CommandHandler("dashboard", dashboard, filters=autorizados))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & autorizados, texto_libre))
     app.add_handler(CallbackQueryHandler(botones_pendiente, pattern=r"^(conf|corr|canc):[0-9a-f]+$"))
     app.add_handler(CallbackQueryHandler(deshacer, pattern=r"^deshacer:[\d,]+$"))
+    return app
 
-    log.info("Bot iniciado en modo polling (modelo: %s)", config.claude_model())
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+async def _correr() -> None:
+    """Bot (polling) y servidor del dashboard en el mismo proceso."""
+    app = _crear_app()
+    async with app:
+        await _configurar_menu(app)
+        await app.start()
+        await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        runner = await dashboard_web.iniciar(config.puerto_web())
+        log.info("Bot iniciado en modo polling (modelo: %s, dashboard: %s)",
+                 config.claude_model(), config.dashboard_url() or "sin URL pública")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await runner.cleanup()
+            await app.updater.stop()
+            await app.stop()
+
+
+def main() -> None:
+    try:
+        asyncio.run(_correr())
+    except KeyboardInterrupt:
+        log.info("Bot detenido")
 
 
 if __name__ == "__main__":
