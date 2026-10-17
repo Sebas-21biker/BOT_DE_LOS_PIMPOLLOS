@@ -43,14 +43,14 @@ async def proponer(update: Update, context: ContextTypes.DEFAULT_TYPE, usuario: 
     if datos["intencion"] == "movimientos":
         tipo, items = "movimientos", datos["movimientos"]
         if problema := comun.problema_movimientos(items, pareja):
-            await update.message.reply_text(problema)
+            await update.effective_message.reply_text(problema)
             return
         cuerpo = "\n\n".join(comun.describir_movimiento({**m, "es_prueba": es_prueba}, usuario, pareja)
                              for m in items)
     else:
         tipo, items = "pagos", datos["pagos"]
         if pareja is None:
-            await update.message.reply_text("Tu pareja todavía no se registra (tiene que tirar un /start) 🤷")
+            await update.effective_message.reply_text("Tu pareja todavía no se registra (tiene que tirar un /start) 🤷")
             return
         cuerpo = "\n\n".join(_describir_pago({**p, "es_prueba": es_prueba}, usuario, pareja) for p in items)
 
@@ -60,7 +60,7 @@ async def proponer(update: Update, context: ContextTypes.DEFAULT_TYPE, usuario: 
     _pendientes(context)[pid] = {"tipo": tipo, "items": items, "mensaje": mensaje_original,
                                  "crudo": datos["crudo"], "es_prueba": es_prueba,
                                  "dueno": update.effective_user.id}
-    await update.message.reply_text(f"¿Lo anoto así? 👇\n\n{cuerpo}", parse_mode="HTML",
+    await update.effective_message.reply_text(f"¿Lo anoto así? 👇\n\n{cuerpo}", parse_mode="HTML",
                                     reply_markup=_botones_propuesta(pid))
 
 
@@ -180,7 +180,7 @@ async def _registro_rapido(update: Update, context: ContextTypes.DEFAULT_TYPE, t
     try:
         datos = parser.interpretar(args, finanzas.nombres_categorias(tipo), permitir_reparto=(tipo == "gasto"))
     except parser.ErrorFormato as e:
-        await update.message.reply_text(f"{e}\nEjemplo: /{tipo} 15000 super lider")
+        await update.effective_message.reply_text(f"{e}\nEjemplo: /{tipo} 15000 super lider")
         return
 
     mov = {
@@ -227,11 +227,11 @@ async def pague(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     pareja = finanzas.otro_usuario(usuario["id"])
     if pareja is None:
-        await update.message.reply_text("Tu pareja todavía no se registra (tiene que tirar un /start) 🤷")
+        await update.effective_message.reply_text("Tu pareja todavía no se registra (tiene que tirar un /start) 🤷")
         return
     monto = next((m for a in context.args if (m := parser.parsear_monto(a)) is not None), None)
     if monto is None:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"Dime cuánto le pagaste a {escape(primer_nombre(pareja))}, tipo: <code>/pague 25000</code>\n"
             "O escríbelo normal: <i>le transferí 25 lucas</i>", parse_mode="HTML")
         return
@@ -239,7 +239,7 @@ async def pague(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "es_prueba": comun.es_prueba(update.message.text)}
     liq_id = finanzas.registrar_liquidacion(usuario["id"], pareja["id"], monto, pago["fecha"],
                                             update.message.text, pago["es_prueba"])
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"✅ ¡Listo, anotado!\n\n{_describir_pago(pago, usuario, pareja)}\n\n{comun.texto_saldo()}",
         parse_mode="HTML", reply_markup=teclado([boton("↩️ Deshacer", f"dpago:{liq_id}")]))
     if not pago["es_prueba"]:
@@ -249,7 +249,7 @@ async def pague(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await comun.usuario_o_aviso(update) is None:
         return
-    await update.message.reply_text(comun.texto_saldo(), parse_mode="HTML")
+    await update.effective_message.reply_text(comun.texto_saldo(), parse_mode="HTML")
 
 
 async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -269,7 +269,7 @@ async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lineas.append("Sin gastos este mes todavía.")
     if not comun.es_grupo(update):  # en grupo no se muestran ingresos individuales
         lineas += ["", f"💼 Tus ingresos del mes: {formatear_clp(datos['mis_ingresos'])}"]
-    await update.message.reply_text("\n".join(lineas), parse_mode="HTML")
+    await update.effective_message.reply_text("\n".join(lineas), parse_mode="HTML")
 
 
 async def borrar_pruebas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -277,6 +277,6 @@ async def borrar_pruebas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     n = finanzas.borrar_pruebas()
     if n:
-        await update.message.reply_text(f"🧹 Listo, borré {n} registro{'s' if n != 1 else ''} de prueba.")
+        await update.effective_message.reply_text(f"🧹 Listo, borré {n} registro{'s' if n != 1 else ''} de prueba.")
     else:
-        await update.message.reply_text("No había nada de prueba 👌")
+        await update.effective_message.reply_text("No había nada de prueba 👌")

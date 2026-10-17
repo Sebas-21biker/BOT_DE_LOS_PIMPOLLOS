@@ -10,6 +10,7 @@ from html import escape
 from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonCommands,
                       MenuButtonWebApp, Update, WebAppInfo)
 from telegram.constants import ChatAction
+from telegram.error import TelegramError
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           filters)
 
@@ -32,7 +33,7 @@ AYUDA = (
     "📍 <i>anota el restaurante Liguria para ir</i> · <i>¿qué hacemos hoy?</i>\n"
     "📌 <i>la clave del wifi es pimpollo123</i> · <i>¿cuál era la clave del wifi?</i>\n\n"
     "📋 <b>Comandos</b>\n"
-    "/saldo · /resumen · /metas · /lista · /recordatorios · /panoramas · /notas · /dashboard\n"
+    "/panel · /saldo · /resumen · /metas · /lista · /recordatorios · /panoramas · /notas · /dashboard\n"
     "/gasto, /ingreso y /pague para anotar rápido sin IA\n\n"
     "🧪 Si escribes <b>test</b> en un gasto o pago, lo anoto como prueba (no cuenta). "
     "Los borras con /borrar_pruebas"
@@ -52,17 +53,55 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(AYUDA, parse_mode="HTML")
 
 
-async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def _boton_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardButton | None:
     url = config.dashboard_url()
     if not url:
-        await update.message.reply_text("El dashboard todavía no tiene dirección pública 🤷")
-        return
+        return None
     if comun.es_grupo(update):
         # En grupos Telegram no permite botones web_app: se usa el enlace directo a la Mini App principal.
-        boton = InlineKeyboardButton("📊 Abrir dashboard", url=f"https://t.me/{context.bot.username}?startapp")
-    else:
-        boton = InlineKeyboardButton("📊 Abrir dashboard", web_app=WebAppInfo(url))
+        return InlineKeyboardButton("📊 Dashboard", url=f"https://t.me/{context.bot.username}?startapp")
+    return InlineKeyboardButton("📊 Dashboard", web_app=WebAppInfo(url))
+
+
+async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    boton = _boton_dashboard(update, context)
+    if boton is None:
+        await update.message.reply_text("El dashboard todavía no tiene dirección pública 🤷")
+        return
     await update.message.reply_text("Ahí está, ábrelo al tiro 👇", reply_markup=InlineKeyboardMarkup([[boton]]))
+
+
+async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mensaje con accesos directos; en grupos se fija arriba del chat."""
+    filas = [
+        [comun.boton("🛒 Lista", "panel:lista"), comun.boton("🎯 Metas", "panel:metas")],
+        [comun.boton("⚖️ Saldo", "panel:saldo"), comun.boton("📊 Resumen", "panel:resumen")],
+        [comun.boton("⏰ Recordatorios", "panel:recordatorios"), comun.boton("📍 Panoramas", "panel:panoramas")],
+        [comun.boton("📌 Notas", "panel:notas"), comun.boton("🎲 ¿Qué hacemos?", "pan:sort:cualquiera")],
+    ]
+    if boton := _boton_dashboard(update, context):
+        filas.insert(0, [boton])
+    mensaje = await update.message.reply_text(
+        "🐣 <b>Panel Pimpollo</b>\nToca lo que necesites, o escríbanme normal 👇",
+        parse_mode="HTML", reply_markup=InlineKeyboardMarkup(filas))
+    if comun.es_grupo(update):
+        try:
+            await context.bot.pin_chat_message(update.effective_chat.id, mensaje.message_id,
+                                               disable_notification=True)
+        except TelegramError:
+            await update.message.reply_text(
+                "📌 No pude fijarlo: hazme administrador del grupo con permiso para fijar mensajes "
+                "(o fíjalo tú: mantén presionado el mensaje → Fijar).")
+
+
+async def cb_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if await comun.usuario_de_boton(query) is None:
+        return
+    await query.answer()
+    vistas = {"lista": hogar.cmd_lista, "metas": hogar.cmd_metas, "saldo": plata.saldo, "resumen": plata.resumen,
+              "recordatorios": hogar.cmd_recordatorios, "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas}
+    await vistas[query.data.split(":")[1]](update, context)
 
 
 # ---------- texto libre ----------
@@ -121,6 +160,7 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 # ---------- arranque ----------
 
 COMANDOS = [
+    BotCommand("panel", "Accesos directos (fíjalo en el grupo)"),
     BotCommand("saldo", "Quién le debe a quién"),
     BotCommand("resumen", "Resumen del mes"),
     BotCommand("metas", "Metas de ahorro"),
@@ -151,7 +191,7 @@ async def _configurar_menu(app: Application) -> None:
 def _crear_app() -> Application:
     autorizados = filters.User(user_id=config.allowed_telegram_ids())
     comandos = {
-        "start": start, "ayuda": ayuda, "dashboard": dashboard,
+        "start": start, "ayuda": ayuda, "dashboard": dashboard, "panel": panel,
         "gasto": plata.gasto, "ingreso": plata.ingreso, "pague": plata.pague,
         "saldo": plata.saldo, "resumen": plata.resumen, "borrar_pruebas": plata.borrar_pruebas,
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
@@ -168,6 +208,7 @@ def _crear_app() -> Application:
     app.add_handler(CallbackQueryHandler(hogar.cb_lista, pattern=r"^lista:"))
     app.add_handler(CallbackQueryHandler(hogar.cb_panorama, pattern=r"^pan:"))
     app.add_handler(CallbackQueryHandler(hogar.cb_borrar, pattern=r"^borrar:"))
+    app.add_handler(CallbackQueryHandler(cb_panel, pattern=r"^panel:"))
     return app
 
 

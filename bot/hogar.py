@@ -67,7 +67,7 @@ async def cmd_metas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await comun.usuario_o_aviso(update) is None:
         return
     texto, botones = _vista_metas()
-    await update.message.reply_text(texto, parse_mode="HTML", reply_markup=botones)
+    await update.effective_message.reply_text(texto, parse_mode="HTML", reply_markup=botones)
 
 
 async def cb_meta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -103,7 +103,7 @@ async def _crear_metas(update: Update, usuario: dict, nuevas: list[dict]) -> Non
         meta_id = metas.crear(m["nombre"], m["emoji"], m["monto_objetivo"], m["fecha_objetivo"], usuario["id"])
         cuando = (f"\n📅 Para {comun.MESES[m['fecha_objetivo'].month - 1]} {m['fecha_objetivo'].year}"
                   if m["fecha_objetivo"] else "")
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"🎯 ¡Meta creada!\n\n{m['emoji']} <b>{escape(m['nombre'])}</b>\n"
             f"Objetivo: {formatear_clp(m['monto_objetivo'])}{cuando}\n\n"
             "Cuando aparten plata, díganme <i>aparté 50 lucas para esto</i> o usen /metas",
@@ -115,7 +115,7 @@ async def _crear_metas(update: Update, usuario: dict, nuevas: list[dict]) -> Non
 async def _aportar(update: Update, context, usuario: dict, meta: dict, monto) -> None:
     aporte_id = metas.aportar(meta["id"], usuario["id"], monto)
     meta = metas.obtener(meta["id"])
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"💰 ¡Vamos! {formatear_clp(monto)} para {meta['emoji']} <b>{escape(meta['nombre'])}</b>\n"
         f"{_barra(meta['porcentaje'])} {meta['porcentaje']}% · {formatear_clp(meta['ahorrado'])} "
         f"de {formatear_clp(meta['monto_objetivo'])}",
@@ -179,7 +179,7 @@ async def cb_lista(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _agregar_compras(update: Update, usuario: dict, compras: list[dict]) -> None:
     ids = hogar.agregar_items([(c["nombre"], c["cantidad"]) for c in compras], usuario["id"])
     nombres = ", ".join(c["nombre"] + (f" ({c['cantidad']})" if c["cantidad"] else "") for c in compras)
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"🛒 Agregué a la lista: {escape(nombres)}",
         reply_markup=teclado([boton("📋 Ver lista", "lista:ver"),
                               boton("↩️ Deshacer", "borrar:item:" + ",".join(map(str, ids)))]))
@@ -191,14 +191,14 @@ async def _crear_recordatorios(update: Update, context, usuario: dict, recordato
     ahora = finanzas.ahora()
     for r in recordatorios:
         if r["fecha_hora"] <= ahora:
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 f"🤔 Esa fecha ({comun.formatear_fecha_hora(r['fecha_hora'])}) ya pasó. ¿Me la dices de nuevo?")
             continue
         para = None if r["para"] == "ambos" else usuario["id"]
         rec_id = hogar.crear_recordatorio(r["texto"], r["fecha_hora"], r["repetir"], para, usuario["id"])
         repite = f" ({REPETIR_TEXTO[r['repetir']]})" if r["repetir"] != "nunca" else ""
         quien = "👥 Para los dos" if para is None else "👤 Solo para ti"
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"⏰ Listo, aviso el {comun.formatear_fecha_hora(r['fecha_hora'])}{repite}\n"
             f"📝 {escape(r['texto'])}\n{quien}",
             parse_mode="HTML", reply_markup=teclado([boton("↩️ Deshacer", f"borrar:rec:{rec_id}")]))
@@ -257,7 +257,7 @@ def _texto_panorama(p: dict) -> str:
 async def _agregar_panoramas(update: Update, usuario: dict, panoramas: list[dict]) -> None:
     ids = hogar.agregar_panoramas([(p["titulo"], p["tipo"], p["notas"]) for p in panoramas], usuario["id"])
     lineas = "\n".join(_texto_panorama(p) for p in panoramas)
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"📍 Anotado en panoramas pendientes:\n{lineas}", parse_mode="HTML",
         reply_markup=teclado([boton("🎲 Sortear uno", "pan:sort:cualquiera"),
                               boton("↩️ Deshacer", "borrar:pan:" + ",".join(map(str, ids)))]))
@@ -284,14 +284,14 @@ async def cmd_panoramas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     lista = hogar.panoramas_pendientes()
     if not lista:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "📍 No hay panoramas pendientes.\nAnoten uno: <i>hay que ir al restaurante Liguria</i>",
             parse_mode="HTML")
         return
     lineas = ["📍 <b>Panoramas pendientes</b>", ""] + [_texto_panorama(p) for p in lista]
     filas = [[boton(f"✅ {p['titulo'][:40]}", f"pan:hecho:{p['id']}")] for p in lista[:12]]
     filas.insert(0, [boton("🎲 Sortear uno", "pan:sort:cualquiera")])
-    await update.message.reply_text("\n".join(lineas), parse_mode="HTML", reply_markup=teclado(*filas))
+    await update.effective_message.reply_text("\n".join(lineas), parse_mode="HTML", reply_markup=teclado(*filas))
 
 
 async def cb_panorama(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -315,7 +315,7 @@ async def cb_panorama(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def _guardar_notas(update: Update, usuario: dict, notas: list[dict]) -> None:
     for n in notas:
         nota_id = hogar.guardar_nota(n["clave"], n["valor"], usuario["id"])
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"📌 Guardado: <b>{escape(n['clave'])}</b> → {escape(n['valor'])}", parse_mode="HTML",
             reply_markup=teclado([boton("↩️ Deshacer", f"borrar:nota:{nota_id}")]))
 
@@ -323,10 +323,10 @@ async def _guardar_notas(update: Update, usuario: dict, notas: list[dict]) -> No
 async def _buscar_notas(update: Update, busqueda: str) -> None:
     encontradas = hogar.buscar_notas(busqueda)
     if not encontradas:
-        await update.message.reply_text("🤔 No tengo nada guardado sobre eso. Revisa /notas")
+        await update.effective_message.reply_text("🤔 No tengo nada guardado sobre eso. Revisa /notas")
         return
     lineas = [f"📌 <b>{escape(n['clave'])}</b>: {escape(n['valor'])}" for n in encontradas]
-    await update.message.reply_text("\n".join(lineas), parse_mode="HTML")
+    await update.effective_message.reply_text("\n".join(lineas), parse_mode="HTML")
 
 
 async def cmd_notas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -334,12 +334,12 @@ async def cmd_notas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     notas = hogar.todas_las_notas()
     if not notas:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "📌 No hay datos guardados.\nGuarda uno: <i>la clave del wifi es pimpollo123</i>", parse_mode="HTML")
         return
     lineas = ["📌 <b>Datos de la casa</b>", ""] + [f"<b>{escape(n['clave'])}</b>: {escape(n['valor'])}" for n in notas]
     filas = [[boton(f"🗑️ {n['clave'][:40]}", f"borrar:nota:{n['id']}")] for n in notas[:15]]
-    await update.message.reply_text("\n".join(lineas), parse_mode="HTML", reply_markup=teclado(*filas))
+    await update.effective_message.reply_text("\n".join(lineas), parse_mode="HTML", reply_markup=teclado(*filas))
 
 
 # ---------- deshacer / borrar genérico ----------
@@ -414,7 +414,7 @@ async def manejar_esperando(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     """
     texto = update.message.text.strip()
     if texto.lower() in ("cancelar", "nada", "olvídalo", "olvidalo"):
-        await update.message.reply_text("👌 Ya, lo dejamos ahí.")
+        await update.effective_message.reply_text("👌 Ya, lo dejamos ahí.")
         return None
 
     if esperando["tipo"] == "meta_nueva":
@@ -429,7 +429,7 @@ async def manejar_esperando(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             monto = None
         if meta is None or monto is None:
             context.user_data["esperando"] = esperando  # sigue esperando
-            await update.message.reply_text("🤔 No cacho el monto. Escríbelo tipo <i>50000</i> o <i>50 lucas</i>",
+            await update.effective_message.reply_text("🤔 No cacho el monto. Escríbelo tipo <i>50000</i> o <i>50 lucas</i>",
                                             parse_mode="HTML")
             return None
         await _aportar(update, context, usuario, meta, monto)
@@ -438,14 +438,14 @@ async def manejar_esperando(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     if esperando["tipo"] == "total_compra":
         if texto.lower() in ("no", "nop", "no gracias"):
             sacados = hogar.quitar_comprados()
-            await update.message.reply_text(f"👌 Saqué de la lista: {escape(', '.join(sacados))}")
+            await update.effective_message.reply_text(f"👌 Saqué de la lista: {escape(', '.join(sacados))}")
             return None
         tokens = comun.sin_marca_prueba(texto).split()
         try:
             datos = parser.interpretar(tokens, finanzas.nombres_categorias("gasto"))
         except parser.ErrorFormato:
             context.user_data["esperando"] = esperando
-            await update.message.reply_text("🤔 No cacho el monto. Escríbelo tipo <i>23990</i> o <i>45 lucas a medias</i>",
+            await update.effective_message.reply_text("🤔 No cacho el monto. Escríbelo tipo <i>23990</i> o <i>45 lucas a medias</i>",
                                             parse_mode="HTML")
             return None
         mov = {"tipo": "gasto", "monto": datos.monto, "moneda": "CLP", "categoria": "Supermercado",
