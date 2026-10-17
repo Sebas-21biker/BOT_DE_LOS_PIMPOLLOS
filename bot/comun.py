@@ -112,6 +112,13 @@ def monto_clp(mov: dict) -> Decimal:
     return mov["monto"] * cambio.tasa(mov["moneda"], finanzas.hoy())
 
 
+def porcentaje(valor: Decimal) -> str:
+    """50 -> '50%', 50.00 -> '50%', 33.5 -> '33,5%'."""
+    valor = Decimal(valor)
+    texto = f"{valor:.0f}" if valor == valor.to_integral_value() else f"{valor.normalize()}".replace(".", ",")
+    return f"{texto}%"
+
+
 def describir_movimiento(mov: dict, usuario: dict, pareja: dict | None) -> str:
     """Texto de un movimiento para mostrar al usuario (HTML)."""
     categoria = finanzas.categoria_por_nombre(mov["categoria"], mov["tipo"])
@@ -129,7 +136,8 @@ def describir_movimiento(mov: dict, usuario: dict, pareja: dict | None) -> str:
     if pct is not None:
         nombre_pareja = escape(pareja["nombre"]) if pareja else "tu pareja"
         pct_pareja = Decimal(100) - pct
-        lineas.append(f"👥 Compartido: {escape(primer_nombre(usuario))} {pct:g}% · {nombre_pareja} {pct_pareja:g}% "
+        lineas.append(f"👥 Compartido: {escape(primer_nombre(usuario))} {porcentaje(pct)} · "
+                      f"{nombre_pareja} {porcentaje(pct_pareja)} "
                       f"({nombre_pareja} debe {formatear_clp(monto_clp(mov) * pct_pareja / 100)})")
     elif mov["tipo"] == "gasto":
         lineas.append(f"👤 Individual, pagado por {escape(usuario['nombre'])}")

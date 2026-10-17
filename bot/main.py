@@ -38,7 +38,7 @@ AYUDA = (
     "💡 <i>recomiéndanos algo para el sábado</i> · <i>ideas de regalo para la Cami</i>\n"
     "📷 Mándame la foto de una boleta y la anoto\n\n"
     "📋 <b>Comandos</b>\n"
-    "/panel · /dashboard · /saldo · /resumen · /semana · /metas · /lista · /tareas · /menu\n"
+    "/panel · /dashboard · /ultimos · /saldo · /resumen · /semana · /metas · /lista · /tareas · /menu\n"
     "/recordatorios · /panoramas · /notas · /perfil · /ideas · /invitar\n"
     "/gasto, /ingreso y /pague para anotar rápido sin IA\n\n"
     "🧪 Si escribes <b>test</b> en un gasto o pago, lo anoto como prueba (no cuenta). "
@@ -162,12 +162,13 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     grupo = comun.es_grupo(update)
 
     # ¿Responde a una pregunta del bot (monto de un aporte, total de la compra...)?
-    contexto = intencion_forzada = None
+    contexto = intencion_forzada = movimiento_id = None
     if esperando := context.user_data.pop("esperando", None):
         resultado = await hogar.manejar_esperando(update, context, usuario, esperando)
         if resultado is None:
             return
         contexto, intencion_forzada = resultado["contexto"], resultado.get("intencion")
+        movimiento_id = resultado.get("movimiento_id")
 
     # ¿Es la corrección de una propuesta anterior?
     prueba = comun.es_prueba(texto)
@@ -195,6 +196,12 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await plata.proponer(update, context, usuario, datos, mensaje_original, prueba)
     elif await hogar.manejar_intencion(update, context, usuario, datos):
         pass
+    elif intencion == "editar_movimiento":
+        movimiento_id = movimiento_id or (previo or {}).get("movimiento_id")
+        mensaje_original = f"{previo['mensaje']} | corrección: {texto}" if anterior else texto
+        await plata.proponer_edicion(update, context, usuario, datos, mensaje_original, movimiento_id)
+    elif intencion == "borrar_movimiento":
+        await plata.proponer_borrado(update, context, usuario, datos["objetivo"])
     elif intencion == "perfil_guardar":
         await pareja.guardar_perfil(update, usuario, datos["perfil"])
     elif intencion == "perfil_ver":
@@ -216,6 +223,7 @@ COMANDOS = [
     BotCommand("panel", "Accesos directos (fíjalo en el grupo)"),
     BotCommand("saldo", "Quién le debe a quién"),
     BotCommand("resumen", "Resumen del mes"),
+    BotCommand("ultimos", "Corregir o borrar tus últimos gastos"),
     BotCommand("semana", "Resumen de la semana"),
     BotCommand("metas", "Metas de ahorro"),
     BotCommand("lista", "Lista de compras"),
@@ -251,7 +259,7 @@ def _crear_app() -> Application:
     AUTORIZADOS.add_user_ids(config.allowed_telegram_ids() | db.telegram_ids_registrados())
     autorizados = AUTORIZADOS
     comandos = {
-        "ayuda": ayuda, "invitar": pareja.cmd_invitar, "perfil": pareja.cmd_perfil, "ideas": pareja.cmd_ideas, "dashboard": dashboard, "panel": panel,
+        "ayuda": ayuda, "invitar": pareja.cmd_invitar, "perfil": pareja.cmd_perfil, "ideas": pareja.cmd_ideas, "ultimos": plata.cmd_ultimos, "dashboard": dashboard, "panel": panel,
         "gasto": plata.gasto, "ingreso": plata.ingreso, "pague": plata.pague,
         "saldo": plata.saldo, "resumen": plata.resumen, "borrar_pruebas": plata.borrar_pruebas,
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
@@ -275,6 +283,7 @@ def _crear_app() -> Application:
     app.add_handler(CallbackQueryHandler(hogar.cb_tarea, pattern=r"^tarea:"))
     app.add_handler(CallbackQueryHandler(hogar.cb_menu, pattern=r"^menu:"))
     app.add_handler(CallbackQueryHandler(pareja.cb_idea, pattern=r"^idea:"))
+    app.add_handler(CallbackQueryHandler(plata.cb_movimiento, pattern=r"^mov:"))
     return app
 
 

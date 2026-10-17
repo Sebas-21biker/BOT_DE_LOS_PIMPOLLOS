@@ -565,6 +565,10 @@ async def manejar_esperando(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.effective_message.reply_text("👌 Ya, lo dejamos ahí.")
         return None
 
+    if esperando["tipo"] == "editar":
+        return {"contexto": f"El usuario está corrigiendo este movimiento ya guardado: {esperando['descripcion']}.",
+                "intencion": "editar_movimiento", "movimiento_id": esperando["movimiento_id"]}
+
     if esperando["tipo"] == "meta_nueva":
         return {"contexto": "El bot le pidió al usuario los datos de una meta de ahorro nueva.",
                 "intencion": "meta_nueva"}

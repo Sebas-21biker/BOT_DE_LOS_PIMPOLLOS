@@ -96,6 +96,59 @@ def borrar_movimiento(movimiento_id: int, usuario_id: int) -> bool:
         return cur.rowcount > 0
 
 
+_SELECT_MOVIMIENTO = """
+    SELECT m.id, m.tipo, m.monto, m.moneda, m.monto_base, m.tipo_cambio_usado, m.fecha, m.descripcion,
+           m.es_compartido, m.es_prueba, m.pagado_por, c.nombre AS categoria,
+           (SELECT r.porcentaje FROM repartos r WHERE r.movimiento_id = m.id AND r.usuario_id = m.pagado_por)
+               AS porcentaje_pagador
+    FROM movimientos m LEFT JOIN categorias c ON c.id = m.categoria_id
+"""
+
+
+def obtener_movimiento(movimiento_id: int) -> dict | None:
+    with conectar() as conn:
+        return conn.execute(_SELECT_MOVIMIENTO + " WHERE m.id = %s", (movimiento_id,)).fetchone()
+
+
+def ultimos_movimientos(usuario_id: int, busqueda: str = "", fecha: date | None = None, limite: int = 8) -> list[dict]:
+    """Movimientos anotados por `usuario_id`, del más reciente al más antiguo, opcionalmente filtrados."""
+    palabras = [f"%{p}%" for p in busqueda.lower().split() if len(p) >= 3] if busqueda else []
+    with conectar() as conn:
+        return conn.execute(
+            _SELECT_MOVIMIENTO + """
+            WHERE m.pagado_por = %(yo)s
+              AND (%(fecha)s::date IS NULL OR m.fecha = %(fecha)s::date)
+              AND (%(palabras)s::text[] IS NULL OR m.descripcion ILIKE ANY(%(palabras)s::text[])
+                   OR c.nombre ILIKE ANY(%(palabras)s::text[]))
+            ORDER BY m.creado_en DESC LIMIT %(limite)s
+            """,
+            {"yo": usuario_id, "fecha": fecha, "palabras": palabras or None, "limite": limite},
+        ).fetchall()
+
+
+def actualizar_movimiento(movimiento_id: int, usuario_id: int, *, monto: Decimal, categoria_id: int,
+                          descripcion: str, fecha: date, repartos: dict[int, Decimal] | None) -> bool:
+    """Reemplaza los datos de un movimiento propio. Mantiene el tipo de cambio con que se registró."""
+    with conectar() as conn, conn.transaction():
+        cur = conn.execute(
+            """
+            UPDATE movimientos
+            SET monto = %(monto)s, monto_base = ROUND(%(monto)s * tipo_cambio_usado, 2), categoria_id = %(cat)s,
+                descripcion = %(desc)s, fecha = %(fecha)s, es_compartido = %(comp)s
+            WHERE id = %(id)s AND pagado_por = %(yo)s
+            """,
+            {"monto": monto, "cat": categoria_id, "desc": descripcion or None, "fecha": fecha,
+             "comp": bool(repartos), "id": movimiento_id, "yo": usuario_id},
+        )
+        if cur.rowcount == 0:
+            return False
+        conn.execute("DELETE FROM repartos WHERE movimiento_id = %s", (movimiento_id,))
+        for uid, porcentaje in (repartos or {}).items():
+            conn.execute("INSERT INTO repartos (movimiento_id, usuario_id, porcentaje) VALUES (%s, %s, %s)",
+                         (movimiento_id, uid, porcentaje))
+        return True
+
+
 def borrar_pruebas() -> int:
     """Borra todos los movimientos y pagos de prueba. Devuelve cuántos borró."""
     with conectar() as conn:

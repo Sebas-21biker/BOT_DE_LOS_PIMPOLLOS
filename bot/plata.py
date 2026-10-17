@@ -100,6 +100,11 @@ async def botones_propuesta(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Confirmar
     usuario = finanzas.obtener_usuario(query.from_user.id)
     pareja = finanzas.otro_usuario(usuario["id"])
+    if pendiente["tipo"] in ("edicion", "borrado"):
+        _pendientes(context).pop(pid)
+        await query.answer("Listo")
+        await _confirmar_edicion(update, context, usuario, pendiente)
+        return
     if pendiente["tipo"] == "movimientos":
         if problema := comun.problema_movimientos(pendiente["items"], pareja):
             await query.answer(problema, show_alert=True)
@@ -129,6 +134,158 @@ async def botones_propuesta(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                                       reply_markup=teclado([boton("↩️ Deshacer", "dpago:" + ",".join(map(str, ids)))]))
         if not pendiente["es_prueba"]:
             await _avisar_pagos(context, update, usuario, pareja, pendiente["items"])
+
+
+# ---------- editar / borrar movimientos ya guardados ----------
+
+def _encontrar(usuario: dict, objetivo: dict, movimiento_id: int | None) -> dict | None:
+    if movimiento_id:
+        mov = finanzas.obtener_movimiento(movimiento_id)
+        return mov if mov and mov["pagado_por"] == usuario["id"] else None
+    encontrados = finanzas.ultimos_movimientos(usuario["id"], objetivo["busqueda"], objetivo["fecha"], limite=1)
+    return encontrados[0] if encontrados else None
+
+
+async def proponer_edicion(update: Update, context: ContextTypes.DEFAULT_TYPE, usuario: dict, datos: dict,
+                           mensaje_original: str, movimiento_id: int | None = None) -> None:
+    actual = _encontrar(usuario, datos["objetivo"], movimiento_id)
+    if actual is None:
+        await update.effective_message.reply_text(
+            "🤔 No encontré ese movimiento entre los que anotaste tú. Mira /ultimos y edítalo desde ahí.")
+        return
+    k = datos["cambios"]
+    validas = finanzas.nombres_categorias(actual["tipo"])
+    nuevo = {**actual}
+    if k["monto"]:
+        nuevo["monto"] = k["monto"]
+    if k["categoria"] in validas:
+        nuevo["categoria"] = k["categoria"]
+    if k["descripcion"]:
+        nuevo["descripcion"] = k["descripcion"]
+    if k["fecha"]:
+        nuevo["fecha"] = k["fecha"]
+    if k["compartido"] == "si" and actual["tipo"] == "gasto":
+        nuevo["porcentaje_pagador"] = k["porcentaje_pagador"]
+    elif k["compartido"] == "no":
+        nuevo["porcentaje_pagador"] = None
+
+    pareja = finanzas.otro_usuario(usuario["id"])
+    if nuevo["porcentaje_pagador"] is not None and pareja is None:
+        await update.effective_message.reply_text("Tu pareja todavía no se registra, así que no puedo dividirlo 🤷")
+        return
+    if nuevo == actual:
+        await update.effective_message.reply_text(
+            "🤔 No caché qué cambiar. Dime, por ejemplo: <i>eran 4500</i>, <i>era a medias</i> o <i>fue ayer</i>",
+            parse_mode="HTML")
+        return
+
+    pid = secrets.token_hex(4)
+    _pendientes(context)[pid] = {"tipo": "edicion", "movimiento_id": actual["id"], "antes": actual, "items": [nuevo],
+                                 "mensaje": mensaje_original, "crudo": datos["crudo"], "es_prueba": actual["es_prueba"],
+                                 "dueno": update.effective_user.id}
+    await update.effective_message.reply_text(
+        "✏️ ¿Lo corrijo así?\n\n<b>Antes</b>\n" + comun.describir_movimiento(actual, usuario, pareja)
+        + "\n\n<b>Después</b>\n" + comun.describir_movimiento(nuevo, usuario, pareja),
+        parse_mode="HTML", reply_markup=_botones_propuesta(pid))
+
+
+async def proponer_borrado(update: Update, context: ContextTypes.DEFAULT_TYPE, usuario: dict, objetivo: dict,
+                           movimiento_id: int | None = None) -> None:
+    actual = _encontrar(usuario, objetivo, movimiento_id)
+    if actual is None:
+        await update.effective_message.reply_text("🤔 No encontré ese movimiento entre los que anotaste tú. Mira /ultimos")
+        return
+    pid = secrets.token_hex(4)
+    _pendientes(context)[pid] = {"tipo": "borrado", "movimiento_id": actual["id"], "antes": actual, "items": [],
+                                 "mensaje": "", "crudo": "{}", "es_prueba": actual["es_prueba"],
+                                 "dueno": update.effective_user.id}
+    pareja = finanzas.otro_usuario(usuario["id"])
+    await update.effective_message.reply_text(
+        "🗑️ ¿Borro este movimiento?\n\n" + comun.describir_movimiento(actual, usuario, pareja), parse_mode="HTML",
+        reply_markup=teclado([boton("🗑️ Sí, borrar", f"conf:{pid}"), boton("❌ No", f"canc:{pid}")]))
+
+
+async def _confirmar_edicion(update: Update, context, usuario: dict, pendiente: dict) -> None:
+    query = update.callback_query
+    pareja = finanzas.otro_usuario(usuario["id"])
+    antes = pendiente["antes"]
+    texto_antes = comun.describir_movimiento(antes, usuario, pareja)
+    if pendiente["tipo"] == "borrado":
+        ok = finanzas.borrar_movimiento(pendiente["movimiento_id"], usuario["id"])
+        await query.edit_message_text(f"🗑️ Borrado\n\n{texto_antes}" if ok else "🤔 Ya no existía.", parse_mode="HTML")
+        cambio_txt = f"borró un gasto compartido: {escape(antes['descripcion'] or antes['categoria'])}"
+    else:
+        nuevo = pendiente["items"][0]
+        repartos = None
+        if nuevo["porcentaje_pagador"] is not None:
+            repartos = {usuario["id"]: nuevo["porcentaje_pagador"], pareja["id"]: 100 - nuevo["porcentaje_pagador"]}
+        ok = finanzas.actualizar_movimiento(
+            pendiente["movimiento_id"], usuario["id"], monto=nuevo["monto"],
+            categoria_id=finanzas.categoria_por_nombre(nuevo["categoria"], nuevo["tipo"])["id"],
+            descripcion=nuevo["descripcion"], fecha=nuevo["fecha"], repartos=repartos)
+        await query.edit_message_text(
+            ("✅ ¡Corregido!\n\n" + comun.describir_movimiento(nuevo, usuario, pareja)) if ok else "🤔 Ya no existía.",
+            parse_mode="HTML")
+        detalles = []
+        if nuevo["monto"] != antes["monto"]:
+            detalles.append(f"monto {comun.formatear_monto(antes['monto'], antes['moneda'])} → "
+                            f"{comun.formatear_monto(nuevo['monto'], nuevo['moneda'])}")
+        if nuevo["porcentaje_pagador"] != antes["porcentaje_pagador"]:
+            detalles.append("ahora es compartido" if antes["porcentaje_pagador"] is None
+                            else "ya no es compartido" if nuevo["porcentaje_pagador"] is None
+                            else f"reparto {comun.porcentaje(nuevo['porcentaje_pagador'])} / "
+                                 f"{comun.porcentaje(100 - nuevo['porcentaje_pagador'])}")
+        if nuevo["categoria"] != antes["categoria"]:
+            detalles.append(f"categoría {escape(nuevo['categoria'])}")
+        if nuevo["fecha"] != antes["fecha"]:
+            detalles.append(f"fecha {comun.formatear_fecha(nuevo['fecha'])}")
+        cambio_txt = (f"corrigió un gasto compartido: {escape(nuevo['descripcion'] or nuevo['categoria'])}"
+                      + (f" ({', '.join(detalles)})" if detalles else ""))
+    compartido = antes["porcentaje_pagador"] is not None or (
+        pendiente["tipo"] == "edicion" and pendiente["items"][0]["porcentaje_pagador"] is not None)
+    if ok and compartido and not pendiente["es_prueba"]:
+        await comun.avisar_pareja(context.bot, update, usuario,
+                                  f"🔔 <b>{escape(primer_nombre(usuario))}</b> {cambio_txt}\n\n{comun.texto_saldo()}")
+
+
+async def cmd_ultimos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    usuario = await comun.usuario_o_aviso(update)
+    if usuario is None:
+        return
+    movs = finanzas.ultimos_movimientos(usuario["id"])
+    if not movs:
+        await update.effective_message.reply_text("Todavía no has anotado nada 🙌")
+        return
+    filas = []
+    for m in movs:
+        etiqueta = (f"{m['fecha'].day}/{m['fecha'].month} · {(m['descripcion'] or m['categoria'])[:22]} · "
+                    f"{comun.formatear_monto(m['monto'], m['moneda'])}")
+        filas.append([boton(f"✏️ {etiqueta}", f"mov:edit:{m['id']}"), boton("🗑️", f"mov:del:{m['id']}")])
+    await update.effective_message.reply_text("🧾 <b>Tus últimos movimientos</b>\nToca ✏️ para corregir o 🗑️ para borrar:",
+                                              parse_mode="HTML", reply_markup=teclado(*filas))
+
+
+async def cb_movimiento(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    usuario = await comun.usuario_de_boton(query)
+    if usuario is None:
+        return
+    _, accion, mid = query.data.split(":")
+    await query.answer()
+    if accion == "del":
+        await proponer_borrado(update, context, usuario, {"busqueda": "", "fecha": None}, int(mid))
+        return
+    mov = finanzas.obtener_movimiento(int(mid))
+    if mov is None or mov["pagado_por"] != usuario["id"]:
+        await query.message.reply_text("🤔 Ese movimiento ya no existe.")
+        return
+    context.user_data["esperando"] = {"tipo": "editar", "movimiento_id": mov["id"],
+                                      "descripcion": f"{mov['descripcion'] or mov['categoria']} "
+                                                     f"{comun.formatear_monto(mov['monto'], mov['moneda'])} del {mov['fecha']}"}
+    await query.message.reply_text(
+        f"✏️ ¿Qué le cambio a <b>{escape(mov['descripcion'] or mov['categoria'])}</b>?\n"
+        "Ej: <i>eran 4500</i>, <i>era a medias</i>, <i>fue ayer</i>, <i>es transporte</i> (o <i>cancelar</i>)",
+        parse_mode="HTML")
 
 
 async def _avisar_compartidos(context, update: Update, usuario: dict, movimientos: list[dict]) -> None:

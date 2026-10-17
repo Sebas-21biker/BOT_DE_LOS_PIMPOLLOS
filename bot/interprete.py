@@ -34,7 +34,7 @@ INTENCIONES = [
     "compras_agregar", "ver_lista", "recordatorio", "ver_recordatorios",
     "panorama_agregar", "panorama_sugerir", "nota_guardar", "nota_buscar",
     "tarea_nueva", "ver_tareas", "tarea_hecha", "menu_semanal",
-    "perfil_guardar", "perfil_ver", "pedir_ideas",
+    "perfil_guardar", "perfil_ver", "pedir_ideas", "editar_movimiento", "borrar_movimiento",
     "consulta", "otro",
 ]
 
@@ -121,7 +121,17 @@ datos de esa intención.
     sorpresa ("recomiéndanos algo para el sábado", "ideas de regalo para la Cami", "¿qué podríamos hacer
     distinto?"). busqueda = qué tipo de idea piden, con los detalles (presupuesto, para quién, cuándo).
     (Si en cambio preguntan qué hacer de lo que YA tienen anotado, es panorama_sugerir.)
-22. otro: cualquier otra cosa (saludos, conversación).
+22. editar_movimiento: corregir un gasto/ingreso YA guardado ("corrige el uber de ayer, eran 4500",
+    "el último gasto era a medias", "el sushi era comida fuera, no supermercado").
+    objetivo: busqueda = palabras para encontrarlo ("uber", "sushi"; "" = el último anotado),
+    fecha = YYYY-MM-DD si dice cuándo fue o "".
+    cambios: solo lo que cambia; lo demás vacío: monto (0 = no cambia), categoria ("" = no cambia),
+    descripcion ("" = no cambia), fecha ("" = no cambia), compartido ("si", "no" o "sin_cambio"),
+    porcentaje_pagador (si pasa a compartido: 50 para "a medias", 40 para "40/60"; si no, 0).
+    Si el Contexto ya dice cuál movimiento es, deja objetivo vacío.
+23. borrar_movimiento: eliminar un gasto/ingreso ya guardado ("borra el gasto del sushi", "elimina el
+    último"). objetivo igual que arriba.
+24. otro: cualquier otra cosa (saludos, conversación).
 
 Imágenes: si viene una foto de una boleta, voucher o comprobante, la intención es movimientos con UN solo
 gasto por el TOTAL pagado (no cada ítem): descripcion = comercio (y qué se compró, breve), fecha = la de la
@@ -211,6 +221,11 @@ def _campos(categorias: list[str]) -> dict:
             "agrupar": {"type": "string", "enum": ["nada", "categoria", "mes", "persona", "descripcion"]},
             "busqueda": _TEXTO,
         }),
+        "objetivo": _obj({"busqueda": _TEXTO, "fecha": _TEXTO}),
+        "cambios": _obj({
+            "monto": _NUMERO, "categoria": _TEXTO, "descripcion": _TEXTO, "fecha": _TEXTO,
+            "compartido": {"type": "string", "enum": ["sin_cambio", "si", "no"]}, "porcentaje_pagador": _NUMERO,
+        }),
         "respuesta": _TEXTO,
     }
 
@@ -223,6 +238,7 @@ _CAMPOS_POR_INTENCION = {
     "nota_buscar": ["busqueda"], "tarea_nueva": ["tareas"], "tarea_hecha": ["busqueda"],
     "menu_semanal": ["busqueda"], "perfil_guardar": ["perfil"], "perfil_ver": ["perfil_filtro"],
     "pedir_ideas": ["busqueda"], "consulta": ["consulta"], "otro": ["respuesta"],
+    "editar_movimiento": ["objetivo", "cambios"], "borrar_movimiento": ["objetivo"],
 }
 
 # Valores por defecto de los campos que una intención no extrae (así el resto del bot no tiene que preguntar).
@@ -232,6 +248,9 @@ _VACIO = {
     "respuesta": "", "perfil_filtro": {"sobre": "todos", "categoria": "todas"},
     "consulta": {"metrica": "gastos", "desde": "", "hasta": "", "categoria": "todas", "persona": "ambos",
                  "agrupar": "nada", "busqueda": ""},
+    "objetivo": {"busqueda": "", "fecha": ""},
+    "cambios": {"monto": 0, "categoria": "", "descripcion": "", "fecha": "", "compartido": "sin_cambio",
+                "porcentaje_pagador": 0},
 }
 
 
@@ -352,6 +371,12 @@ def _validar(datos: dict, ahora: datetime, categorias_gasto: list[str], categori
     c["hasta"] = _fecha(c["hasta"], hoy)
     if c["desde"] > c["hasta"]:
         c["desde"], c["hasta"] = c["hasta"], c["desde"]
+    o = datos["objetivo"]
+    o["fecha"] = _fecha(o["fecha"], None) if o["fecha"] else None
+    k = datos["cambios"]
+    k["fecha"] = _fecha(k["fecha"], None) if k["fecha"] else None
+    k["monto"] = Decimal(str(k["monto"])).quantize(Decimal("0.01")) if k["monto"] and k["monto"] > 0 else None
+    k["porcentaje_pagador"] = Decimal(str(k["porcentaje_pagador"])) if 0 < k["porcentaje_pagador"] <= 100 else Decimal(50)
 
     # Si la intención quedó sin datos, se trata como conversación.
     requeridos = {"movimientos": "movimientos", "pago_pareja": "pagos", "meta_nueva": "metas_nuevas",
