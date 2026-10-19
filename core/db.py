@@ -29,6 +29,25 @@ def registrar_usuario(telegram_id: int, nombre: str) -> dict:
 MAX_USUARIOS = 2  # es un bot de pareja
 
 
+def usuario_por_token(token: str) -> dict | None:
+    """Usuario dueño del token de pagos automáticos."""
+    if not token:
+        return None
+    with conectar() as conn:
+        return conn.execute("SELECT * FROM usuarios WHERE token_auto = %s", (token,)).fetchone()
+
+
+def token_automatico(usuario_id: int, nuevo: bool = False) -> str:
+    """Devuelve el token de pagos automáticos del usuario (lo crea si no tiene o si se pide uno nuevo)."""
+    with conectar() as conn:
+        actual = conn.execute("SELECT token_auto FROM usuarios WHERE id = %s", (usuario_id,)).fetchone()["token_auto"]
+        if actual and not nuevo:
+            return actual
+        token = secrets.token_urlsafe(18)
+        conn.execute("UPDATE usuarios SET token_auto = %s WHERE id = %s", (token, usuario_id))
+        return token
+
+
 def telegram_ids_registrados() -> set[int]:
     with conectar() as conn:
         return {r["telegram_id"] for r in conn.execute("SELECT telegram_id FROM usuarios")}

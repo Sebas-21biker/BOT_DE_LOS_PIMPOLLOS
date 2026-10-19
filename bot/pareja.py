@@ -2,7 +2,7 @@
 
 import logging
 import secrets
-from datetime import timedelta
+from datetime import date, timedelta
 from html import escape
 from urllib.parse import quote
 
@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 
 from bot import comun, interprete
 from bot.comun import boton, primer_nombre, teclado
-from core import db, finanzas, hogar, perfil, preguntas
+from core import db, feriados, finanzas, hogar, perfil, preguntas
 
 log = logging.getLogger(__name__)
 
@@ -118,25 +118,34 @@ def _estacion(mes: int) -> str:
             6: "invierno", 7: "invierno", 8: "invierno"}.get(mes, "primavera")
 
 
-def _contexto_ideas(usuario: dict) -> str:
+def _contexto_ideas(usuario: dict, recientes: list[str]) -> str:
     pareja = finanzas.otro_usuario(usuario["id"])
     hoy = finanzas.hoy()
     lineas = [f"Hoy: {comun.DIAS[hoy.weekday()]} {hoy:%Y-%m-%d} ({_estacion(hoy.month)} en Chile).",
-              f"Pide: {usuario['nombre']}" + (f" (su pareja es {pareja['nombre']})" if pareja else ""),
-              "", "Perfil:"]
+              f"Pide: {usuario['nombre']}" + (f" (su pareja es {pareja['nombre']})" if pareja else "")]
+    proximos = feriados.proximos(hoy, dias=30)
+    if proximos:
+        lineas += ["", "Feriados y fechas especiales del próximo mes:"]
+        lineas += [f"- {f['fecha']:%Y-%m-%d} ({comun.DIAS[f['fecha'].weekday()]}): {f['nombre']}" for f in proximos]
+    lineas += ["", "Perfil (contexto opcional; usa solo lo relacionado con lo que piden):"]
     filas = perfil.listar()
     lineas += [f"- {f['nombre'] or 'De los dos'} / {f['categoria']}: {f['dato']}" for f in filas] or ["- (vacío)"]
     pendientes = hogar.panoramas_pendientes()
     if pendientes:
-        lineas += ["", "Panoramas que ya tienen anotados (puedes sugerir uno si calza):"]
+        lineas += ["", "Panoramas que ya tienen anotados (puedes sugerir uno si calza con lo que piden):"]
         lineas += [f"- {p['titulo']} ({p['tipo']})" for p in pendientes[:15]]
+    if recientes:
+        lineas += ["", "Ideas que ya sugeriste hace poco (no las repitas):"] + [f"- {t}" for t in recientes]
     return "\n".join(lineas)
 
 
 async def armar_ideas(usuario: dict, pedido: str, bot_data: dict, titulo: str = "💡 <b>Ideas para ustedes</b>"):
     """Genera ideas y devuelve (texto HTML, botones para guardarlas). Lanza ErrorInterprete si falla."""
-    resultado = await interprete.generar_ideas(pedido, _contexto_ideas(usuario))
+    recientes: list = bot_data.setdefault("ideas_recientes", [])
+    resultado = await interprete.generar_ideas(pedido, _contexto_ideas(usuario, recientes))
     ideas = resultado["ideas"][:5]
+    recientes.extend(i["titulo"] for i in ideas)
+    del recientes[:-20]  # memoria de las últimas 20 ideas
     iid = secrets.token_hex(4)
     bot_data.setdefault("ideas", {})[iid] = ideas
     lineas = [titulo, ""]
@@ -186,6 +195,86 @@ async def cmd_pregunta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     if not await enviar_pregunta(context.application, usuario):
         await update.effective_message.reply_text("🙌 ¡Ya te hice todas las preguntas que tenía!")
+
+
+def _boton_pedir_ideas(bot_data: dict, texto: str, pedido: str):
+    clave = secrets.token_hex(4)
+    bot_data.setdefault("pedidos_ideas", {})[clave] = pedido
+    return boton(texto, f"pideas:{clave}")
+
+
+async def cb_pedir_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    usuario = await comun.usuario_de_boton(query)
+    if usuario is None:
+        return
+    pedido = context.bot_data.get("pedidos_ideas", {}).get(query.data.split(":")[1])
+    await query.answer()
+    await pedir_ideas(update, context, usuario, pedido or "ideas para hacer juntos")
+
+
+async def cmd_feriados(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await comun.usuario_o_aviso(update) is None:
+        return
+    lista = feriados.proximos(finanzas.hoy(), dias=120)
+    lineas = ["🗓️ <b>Feriados y fechas especiales</b> (próximos 4 meses)", ""]
+    for f in lista:
+        emoji = "🇨🇱" if f["feriado"] else "💝"
+        extra = " · <i>¡finde largo!</i>" if f["feriado"] and feriados.es_finde_largo(f["fecha"]) else ""
+        lineas.append(f"{emoji} {comun.DIAS[f['fecha'].weekday()]} {comun.formatear_fecha(f['fecha'])}: "
+                      f"{escape(f['nombre'])}{extra}")
+    lineas += ["", "<i>¿Cumpleaños, aniversario o el santo de alguien? Díganme, tipo: "
+                   "«el santo de la Cami es el 26 de julio», y les aviso con ideas una semana antes 😉</i>"]
+    await update.effective_message.reply_text("\n".join(lineas), parse_mode="HTML")
+
+
+async def avisar_feriados(app) -> None:
+    """Avisa la víspera de un feriado y, una semana antes, de las fechas especiales (con ideas de regalo)."""
+    hoy = finanzas.hoy()
+    usuarios = finanzas.todos_los_usuarios()
+    for f in feriados.proximos(hoy, dias=7):
+        dias = (f["fecha"] - hoy).days
+        if f["feriado"] and dias == 1 and hogar.reservar_envio(f"feriado-{f['fecha']}"):
+            largo = feriados.es_finde_largo(f["fecha"])
+            texto = (f"🇨🇱 Mañana es feriado: <b>{escape(f['nombre'])}</b>"
+                     + ("\n¡Se viene finde largo! 🙌" if largo else ""))
+            pedido = (f"panoramas para el {'fin de semana largo' if largo else 'feriado'} de {f['nombre']} "
+                      f"({f['fecha']:%Y-%m-%d})")
+            for u in usuarios:
+                try:
+                    await app.bot.send_message(u["telegram_id"], texto, parse_mode="HTML", reply_markup=teclado(
+                        [_boton_pedir_ideas(app.bot_data, "💡 Ideas para el feriado", pedido)]))
+                except Exception:
+                    log.warning("No pude avisar el feriado a %s", u["nombre"])
+        if not f["feriado"] and dias == 7 and hogar.reservar_envio(f"especial-{f['fecha']}"):
+            for u in usuarios:
+                try:
+                    if f["regalo"]:  # San Valentín / Navidad: ideas en privado para sorprender a la pareja
+                        pareja = finanzas.otro_usuario(u["id"])
+                        para = f" para {pareja['nombre']}" if pareja else ""
+                        texto, botones = await armar_ideas(
+                            u, f"ideas de regalo o plan{para} por {f['nombre']} ({f['fecha']:%Y-%m-%d})",
+                            app.bot_data, titulo=f"💝 <b>En una semana es {escape(f['nombre'])}</b>\n"
+                                                 "Ideas para ir preparando (esto lo ves solo tú 🤫):")
+                        await app.bot.send_message(u["telegram_id"], texto, parse_mode="HTML", reply_markup=botones)
+                    else:
+                        await app.bot.send_message(
+                            u["telegram_id"],
+                            f"💝 El {comun.DIAS[f['fecha'].weekday()]} {comun.formatear_fecha(f['fecha'])} es "
+                            f"<b>{escape(f['nombre'])}</b>, ¡que no se les pase! 😉", parse_mode="HTML")
+                except Exception:
+                    log.exception("No pude avisar %s a %s", f["nombre"], u["nombre"])
+    # Navidad se avisa con más tiempo (además del aviso de la semana antes, para los regalos).
+    navidad = date(hoy.year, 12, 25)
+    if (navidad - hoy).days == 21 and hogar.reservar_envio(f"navidad-{hoy.year}"):
+        for u in usuarios:
+            try:
+                await app.bot.send_message(
+                    u["telegram_id"], "🎄 ¡Quedan 3 semanas para Navidad! ¿Partimos con los regalos?",
+                    reply_markup=teclado([_boton_pedir_ideas(app.bot_data, "🎁 Ideas de regalo para mi pareja",
+                                                             "ideas de regalo de Navidad para mi pareja")]))
+            except Exception:
+                log.warning("No pude avisar Navidad a %s", u["nombre"])
 
 
 async def avisar_fechas_especiales(app) -> None:

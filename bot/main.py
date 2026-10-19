@@ -14,7 +14,7 @@ from telegram.error import TelegramError
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           filters)
 
-from bot import comun, consultas, hogar, interprete, pareja, plata
+from bot import automatico, comun, consultas, hogar, interprete, pareja, plata
 from core import config, db, finanzas, metas
 from core import hogar as hogar_core
 from dashboard import web as dashboard_web
@@ -39,7 +39,8 @@ AYUDA = (
     "📷 Mándame la foto de una boleta y la anoto\n\n"
     "📋 <b>Comandos</b>\n"
     "/panel · /dashboard · /ultimos · /saldo · /resumen · /semana · /metas · /lista · /tareas · /menu\n"
-    "/recordatorios · /panoramas · /notas · /perfil · /ideas · /pregunta · /invitar\n"
+    "/recordatorios · /panoramas · /notas · /perfil · /ideas · /pregunta · /feriados · /invitar\n"
+    "📱 /automatico para que tus pagos con el celular se anoten solos (con tu confirmación)\n"
     "/gasto, /ingreso y /pague para anotar rápido sin IA\n\n"
     "🧪 Si escribes <b>test</b> en un gasto o pago, lo anoto como prueba (no cuenta). "
     "Los borras con /borrar_pruebas"
@@ -235,6 +236,8 @@ COMANDOS = [
     BotCommand("perfil", "Lo que el bot sabe de ustedes"),
     BotCommand("ideas", "Ideas de citas, regalos y panoramas"),
     BotCommand("pregunta", "Una pregunta para conocerse mejor"),
+    BotCommand("feriados", "Feriados y fechas especiales"),
+    BotCommand("automatico", "Anotar pagos del celular automáticamente"),
     BotCommand("invitar", "Link para que tu pareja se una"),
     BotCommand("pague", "Anotar que le pagaste a tu pareja"),
     BotCommand("gasto", "Registro rápido de gasto"),
@@ -260,7 +263,8 @@ def _crear_app() -> Application:
     AUTORIZADOS.add_user_ids(config.allowed_telegram_ids() | db.telegram_ids_registrados())
     autorizados = AUTORIZADOS
     comandos = {
-        "ayuda": ayuda, "invitar": pareja.cmd_invitar, "perfil": pareja.cmd_perfil, "ideas": pareja.cmd_ideas, "ultimos": plata.cmd_ultimos, "pregunta": pareja.cmd_pregunta, "dashboard": dashboard, "panel": panel,
+        "ayuda": ayuda, "invitar": pareja.cmd_invitar, "perfil": pareja.cmd_perfil, "ideas": pareja.cmd_ideas, "ultimos": plata.cmd_ultimos, "pregunta": pareja.cmd_pregunta, "feriados": pareja.cmd_feriados,
+        "automatico": automatico.cmd_automatico, "dashboard": dashboard, "panel": panel,
         "gasto": plata.gasto, "ingreso": plata.ingreso, "pague": plata.pague,
         "saldo": plata.saldo, "resumen": plata.resumen, "borrar_pruebas": plata.borrar_pruebas,
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
@@ -285,6 +289,7 @@ def _crear_app() -> Application:
     app.add_handler(CallbackQueryHandler(hogar.cb_menu, pattern=r"^menu:"))
     app.add_handler(CallbackQueryHandler(pareja.cb_idea, pattern=r"^idea:"))
     app.add_handler(CallbackQueryHandler(plata.cb_movimiento, pattern=r"^mov:"))
+    app.add_handler(CallbackQueryHandler(pareja.cb_pedir_ideas, pattern=r"^pideas:"))
     return app
 
 
@@ -295,7 +300,8 @@ async def _correr() -> None:
         await _configurar_menu(app)
         await app.start()
         await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-        runner = await dashboard_web.iniciar(config.puerto_web())
+        runner = await dashboard_web.iniciar(
+            config.puerto_web(), al_recibir_pago=lambda usuario, texto: automatico.procesar_pago(app, usuario, texto))
         tareas = [asyncio.create_task(hogar.bucle_recordatorios(app.bot)),
                   asyncio.create_task(consultas.bucle_programados(app))]
         log.info("Bot iniciado en modo polling (modelo: %s, dashboard: %s)",

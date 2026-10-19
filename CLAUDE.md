@@ -87,6 +87,16 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 - Automáticos (`consultas.bucle_programados`): tareas 9:00, ideas anticipadas 7 días antes de
   cumpleaños/aniversarios (recordatorios anuales; no se envían a la persona festejada), pregunta pimpolla
   martes y viernes 20:30 (`core/preguntas.py`, respuesta → perfil), resumen semanal domingo 20:00.
+- Feriados (`core/feriados.py`): feriados legales nacionales desde date.nager.at (guardados en `feriados`)
+  + fechas especiales calculadas (San Valentín, Día de la Madre/Padre/Niño, Halloween, Nochebuena...).
+  Aviso la víspera de cada feriado (con botón de ideas), 7 días antes de fechas especiales (ideas de regalo
+  privadas para San Valentín/Navidad) y 3 semanas antes de Navidad. Van en el contexto del intérprete y
+  de las ideas. Santos: se guardan como recordatorio anual ("el santo de X es el...").
+- Ideas: el perfil es contexto opcional; solo se usa lo relacionado con lo pedido. Se recuerdan las
+  últimas 20 ideas para no repetir.
+- Pagos automáticos (`bot/automatico.py`): POST /auto/{token} (token por usuario en `usuarios.token_auto`,
+  /automatico lo entrega con instrucciones para Atajos de iPhone y MacroDroid). El aviso se interpreta y
+  SIEMPRE se propone con Confirmar/Corregir; duplicados en 3 minutos se ignoran.
 - `bot/plata.py`: gastos/ingresos/pagos (con Confirmar/Corregir), /saldo, /resumen, /pague, avisos.
 - `bot/hogar.py`: metas, lista de compras, recordatorios, panoramas y notas de la casa.
 - `bot/comun.py`: utilidades compartidas.

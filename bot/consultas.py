@@ -165,6 +165,7 @@ async def bucle_programados(app) -> None:
                 await hogar_bot.avisar_tareas_del_dia(bot)
             if ahora.hour >= 10 and await asyncio.to_thread(hogar.reservar_envio, f"anticipos-{ahora:%Y-%m-%d}"):
                 await pareja.avisar_fechas_especiales(app)
+                await pareja.avisar_feriados(app)
             if (ahora.weekday() in (1, 4) and (ahora.hour, ahora.minute) >= (20, 30)
                     and await asyncio.to_thread(hogar.reservar_envio, f"preguntas-{ahora:%Y-%m-%d}")):
                 for usuario in await asyncio.to_thread(finanzas.todos_los_usuarios):

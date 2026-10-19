@@ -39,29 +39,36 @@ def _describir_pago(pago: dict, usuario: dict, pareja: dict) -> str:
 async def proponer(update: Update, context: ContextTypes.DEFAULT_TYPE, usuario: dict, datos: dict,
                    mensaje_original: str, es_prueba: bool) -> None:
     """Muestra lo que entendió la IA (movimientos o pagos) con botones para confirmar."""
+    await enviar_propuesta(context.bot, context.bot_data, update.effective_chat.id, update.effective_user.id,
+                           usuario, datos, mensaje_original, es_prueba)
+
+
+async def enviar_propuesta(bot, bot_data: dict, chat_id: int, dueno: int, usuario: dict, datos: dict,
+                           mensaje_original: str, es_prueba: bool, encabezado: str = "¿Lo anoto así? 👇") -> None:
+    """Igual que proponer, pero sin un mensaje al que responder (sirve para pagos detectados automáticamente)."""
     pareja = finanzas.otro_usuario(usuario["id"])
     if datos["intencion"] == "movimientos":
         tipo, items = "movimientos", datos["movimientos"]
         if problema := comun.problema_movimientos(items, pareja):
-            await update.effective_message.reply_text(problema)
+            await bot.send_message(chat_id, problema)
             return
         cuerpo = "\n\n".join(comun.describir_movimiento({**m, "es_prueba": es_prueba}, usuario, pareja)
                              for m in items)
     else:
         tipo, items = "pagos", datos["pagos"]
         if pareja is None:
-            await update.effective_message.reply_text("Tu pareja todavía no se registra (tiene que tirar un /start) 🤷")
+            await bot.send_message(chat_id, "Tu pareja todavía no se registra (tiene que tirar un /start) 🤷")
             return
         cuerpo = "\n\n".join(_describir_pago({**p, "es_prueba": es_prueba}, usuario, pareja) for p in items)
 
     for item in items:
         item["es_prueba"] = es_prueba
     pid = secrets.token_hex(4)
-    _pendientes(context)[pid] = {"tipo": tipo, "items": items, "mensaje": mensaje_original,
-                                 "crudo": datos["crudo"], "es_prueba": es_prueba,
-                                 "dueno": update.effective_user.id}
-    await update.effective_message.reply_text(f"¿Lo anoto así? 👇\n\n{cuerpo}", parse_mode="HTML",
-                                    reply_markup=_botones_propuesta(pid))
+    bot_data.setdefault("pendientes", {})[pid] = {
+        "tipo": tipo, "items": items, "mensaje": mensaje_original, "crudo": datos["crudo"],
+        "es_prueba": es_prueba, "dueno": dueno}
+    await bot.send_message(chat_id, f"{encabezado}\n\n{cuerpo}", parse_mode="HTML",
+                           reply_markup=_botones_propuesta(pid))
 
 
 def tomar_para_corregir(context: ContextTypes.DEFAULT_TYPE) -> dict | None:

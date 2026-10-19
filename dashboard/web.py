@@ -17,7 +17,7 @@ from urllib.parse import parse_qsl
 
 from aiohttp import web
 
-from core import config, finanzas, reportes
+from core import config, db, finanzas, reportes
 
 log = logging.getLogger(__name__)
 
@@ -91,15 +91,52 @@ async def _api_dashboard(request: web.Request) -> web.Response:
     return web.json_response(datos, dumps=lambda d: json.dumps(d, default=_a_json, ensure_ascii=False))
 
 
-def crear_app() -> web.Application:
+VENTANA_DUPLICADOS = 180  # segundos: el mismo aviso repetido en este lapso se ignora
+
+
+async def _pago_automatico(request: web.Request) -> web.Response:
+    """POST /auto/{token}: el celular avisa un pago. Cuerpo JSON {"texto": "..."} (o {"monto", "comercio"})
+    o texto plano. Se responde al tiro y el bot le pregunta al usuario si lo anota."""
+    usuario = await asyncio.to_thread(db.usuario_por_token, request.match_info["token"])
+    if usuario is None:
+        raise web.HTTPNotFound(text="Token inválido")
+    crudo = await request.text()
+    try:
+        cuerpo = json.loads(crudo)
+        texto = cuerpo.get("texto") or " ".join(str(cuerpo.get(k, "")) for k in ("monto", "comercio", "detalle"))
+    except (ValueError, AttributeError):
+        texto = crudo
+    texto = " ".join(str(texto).split())[:500]
+    if not texto:
+        raise web.HTTPBadRequest(text="Falta el texto del pago")
+
+    recientes: dict = request.app["recientes"]
+    ahora = time.time()
+    for clave, momento in list(recientes.items()):
+        if ahora - momento > VENTANA_DUPLICADOS:
+            del recientes[clave]
+    clave = (usuario["id"], texto.lower())
+    if clave in recientes:
+        return web.json_response({"ok": True, "duplicado": True})
+    recientes[clave] = ahora
+
+    asyncio.create_task(request.app["al_recibir_pago"](usuario, texto))
+    return web.json_response({"ok": True})
+
+
+def crear_app(al_recibir_pago=None) -> web.Application:
     app = web.Application(middlewares=[_autenticar])
+    app["al_recibir_pago"] = al_recibir_pago
+    app["recientes"] = {}
     app.router.add_get("/", _index)
     app.router.add_get("/api/dashboard", _api_dashboard)
+    if al_recibir_pago is not None:
+        app.router.add_post("/auto/{token}", _pago_automatico)
     return app
 
 
-async def iniciar(puerto: int) -> web.AppRunner:
-    runner = web.AppRunner(crear_app(), access_log=None)
+async def iniciar(puerto: int, al_recibir_pago=None) -> web.AppRunner:
+    runner = web.AppRunner(crear_app(al_recibir_pago), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", puerto).start()
     log.info("Dashboard escuchando en el puerto %s", puerto)

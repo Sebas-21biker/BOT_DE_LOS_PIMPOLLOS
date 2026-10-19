@@ -213,7 +213,7 @@ def fechas_especiales_el(fecha) -> list[dict]:
         return conn.execute(
             """
             SELECT id, texto, fecha_hora FROM recordatorios
-            WHERE NOT enviado AND repetir = 'anual' AND texto ~* '(cumple|aniversario)'
+            WHERE NOT enviado AND repetir = 'anual' AND texto ~* '(cumple|aniversario|santo)'
               AND (fecha_hora AT TIME ZONE 'America/Santiago')::date = %s
             """,
             (fecha,),

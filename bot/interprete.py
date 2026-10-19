@@ -11,7 +11,7 @@ from decimal import Decimal
 
 import anthropic
 
-from core import config
+from core import config, feriados
 from core.finanzas import ZONA
 
 log = logging.getLogger(__name__)
@@ -306,6 +306,10 @@ async def interpretar(
     encabezado = (f"Ahora: {DIAS[ahora.weekday()]} {ahora:%Y-%m-%d %H:%M} (hora de Chile).\n"
                   f"Metas activas: {', '.join(metas_activas) or 'ninguna'}.\n"
                   f"Tareas activas: {', '.join(tareas_activas) or 'ninguna'}.\n")
+    proximos = feriados.proximos(ahora.date(), dias=45)
+    if proximos:
+        encabezado += "Próximos feriados y fechas especiales: " + "; ".join(
+            f"{f['nombre']} {f['fecha']:%Y-%m-%d}" for f in proximos) + ".\n"
     if contexto:
         encabezado += f"Contexto: {contexto}\n"
 
@@ -489,13 +493,22 @@ async def generar_menu(preferencias: str) -> dict:
 
 
 IDEAS_SISTEMA = """Eres "Pimpollo", amigo chileno buena onda de una pareja que vive en Chile. Te piden ideas (citas,
-regalos, panoramas, sorpresas). Usa lo que sabes de ellos (su perfil, panoramas pendientes) para que las ideas
-sean personales, concretas y realistas en Chile, considerando la fecha/estación. Propón entre 3 y 5 ideas
-distintas entre sí (alguna barata o gratis si no dicen presupuesto). titulo corto; descripcion de 1 a 2 frases
-diciendo por qué les calza (menciona el gusto o dato que usaste); tipo según la lista. No inventes datos de ellos
-que no estén en el contexto. Si las ideas son para UNA persona (regalo, cumpleaños, sorpresa), básalas en los
-gustos de ESA persona; los datos de quien pide sirven solo como contexto. Nunca tomes partido ni juzgues. comentario: frase corta con modismos chilenos suaves
-y máximo un emoji."""
+regalos, panoramas, películas, sorpresas). Propón entre 3 y 5 ideas concretas, realistas en Chile y distintas
+entre sí, considerando la fecha, la estación y los feriados cercanos (alguna barata o gratis si no dicen
+presupuesto). titulo corto; descripcion de 1 a 2 frases; tipo según la lista.
+
+Cómo usar el perfil (muy importante):
+- El perfil es contexto opcional, NO una lista de cosas que meter. Usa un dato SOLO si tiene relación directa con
+  lo que piden: para una película usa gustos de cine, series o géneros; para un regalo, los gustos de esa persona;
+  para salir a comer, sus comidas favoritas. NO mezcles cosas no pedidas (ej: si piden una película, no la
+  combines con su comida favorita).
+- Nunca uses el mismo dato del perfil en más de una idea. Está bien que varias ideas no usen el perfil.
+- Si usas un dato, menciónalo de forma natural en la descripcion; si no, no lo fuerces.
+- No repitas ideas que ya sugeriste hace poco (vienen en el contexto). Sorprende con variedad.
+- Si las ideas son para UNA persona (regalo, cumpleaños, sorpresa), básalas en los gustos de ESA persona.
+- No inventes datos de ellos que no estén en el contexto. Nunca tomes partido ni juzgues.
+
+comentario: frase corta con modismos chilenos suaves y máximo un emoji."""
 
 
 async def generar_ideas(pedido: str, contexto: str) -> dict:
