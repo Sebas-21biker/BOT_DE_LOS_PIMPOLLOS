@@ -104,6 +104,10 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
   (promos, claves, estados de cuenta) se ignora en silencio; transferencias con la pareja → pago_pareja.
   Antiduplicados: un correo con el mismo monto (±1 día) que un pago llegado por otro camino (Apple Pay o a
   mano) se descarta como "eco" (registrado en envios_programados con prefijo eco:).
+- Costo de la IA: cada llamada a Claude se registra en `uso_ia` (tokens, modelo, motivo) y /costo calcula
+  el gasto del mes con SQL usando los precios de `core/costos.py` (actualizarlos si cambian). Ahorros: los
+  correos sin ningún monto se descartan sin llamar a Claude, y en avisos automáticos con intención "otro"
+  no se hace el paso 2 (`extraer_otro=False`).
 - `bot/plata.py`: gastos/ingresos/pagos (con Confirmar/Corregir), /saldo, /resumen, /pague, avisos.
 - `bot/hogar.py`: metas, lista de compras, recordatorios, panoramas y notas de la casa.
 - `bot/comun.py`: utilidades compartidas.

@@ -4,9 +4,11 @@ Claude solo decide QUÉ consultar; los números salen de SQL (core/reportes.py).
 """
 
 import asyncio
+import calendar
 import logging
 import re
 from datetime import date, timedelta
+from decimal import Decimal
 from html import escape
 
 from telegram import Bot, Update
@@ -17,7 +19,7 @@ from telegram.ext import ContextTypes
 from bot import comun, interprete, plata
 from bot import hogar as hogar_bot
 from bot import pareja
-from core import finanzas, hogar, metas, reportes
+from core import cambio, config, costos, finanzas, hogar, metas, reportes
 from core.finanzas import formatear_clp
 
 log = logging.getLogger(__name__)
@@ -107,7 +109,7 @@ async def foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         datos = await interprete.interpretar(
             "[Foto adjunta] " + comun.sin_marca_prueba(caption), finanzas.ahora(),
             finanzas.nombres_categorias("gasto"), finanzas.nombres_categorias("ingreso"),
-            [m["nombre"] for m in metas.listar()], imagen=imagen)
+            [m["nombre"] for m in metas.listar()], imagen=imagen, motivo="foto")
     except interprete.ErrorInterprete as e:
         await update.message.reply_text(str(e))
         return
@@ -116,6 +118,44 @@ async def foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                              comun.es_prueba(caption))
     elif not comun.es_grupo(update):  # en el grupo las fotos normales no se comentan
         await update.message.reply_text(escape(datos["respuesta"]) or "🤔 No vi una boleta ahí.", parse_mode="HTML")
+
+
+# ---------- costo de la IA ----------
+
+MOTIVOS = {"mensaje": "💬 Mensajes", "correo": "🏦 Correos del banco", "atajo": "📱 Pagos con el celular",
+           "foto": "📷 Fotos de boletas", "menu": "🍽️ Menús", "ideas": "💡 Ideas"}
+
+
+async def cmd_costo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/costo — cuánto va costando la IA este mes (calculado con los tokens que reporta la API)."""
+    if await comun.usuario_o_aviso(update) is None:
+        return
+    hoy = finanzas.hoy()
+    actual = costos.resumen_mes(hoy)
+    anterior = costos.resumen_mes((hoy.replace(day=1) - timedelta(days=1)))
+    try:
+        clp_por_usd = cambio.tasa("USD", hoy)
+    except cambio.SinTipoDeCambio:
+        clp_por_usd = Decimal(950)
+
+    def plata(usd) -> str:
+        dolares = f"US${usd:.2f}" if usd >= 0.1 else f"US${usd:.4f}"  # montos chicos: con más decimales
+        return f"{dolares} (≈ {formatear_clp(Decimal(str(usd)) * clp_por_usd)})"
+
+    dias_mes = calendar.monthrange(hoy.year, hoy.month)[1]
+    proyeccion = actual["usd"] / hoy.day * dias_mes if actual["llamadas"] else 0
+    lineas = [f"🤖 <b>Costo de la IA en {comun.MESES[hoy.month - 1]}</b>", "",
+              f"Llevamos <b>{plata(actual['usd'])}</b> en {actual['llamadas']} llamadas a Claude"]
+    if actual["llamadas"]:
+        lineas.append(f"A este ritmo, el mes cerraría en ~{plata(proyeccion)}")
+        lineas.append("")
+        lineas += [f"{MOTIVOS.get(f['motivo'], f['motivo'])}: {plata(f['usd'])} · {f['llamadas']} llamadas"
+                   for f in actual["por_motivo"]]
+    if anterior["llamadas"]:
+        lineas += ["", f"Mes pasado: {plata(anterior['usd'])}"]
+    lineas += ["", f"<i>Modelo: {escape(config.claude_model())}. Los resúmenes, avisos y recordatorios "
+                   "no usan IA (son gratis).</i>"]
+    await update.effective_message.reply_text("\n".join(lineas), parse_mode="HTML")
 
 
 # ---------- resumen semanal ----------

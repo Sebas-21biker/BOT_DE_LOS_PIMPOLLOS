@@ -2,6 +2,7 @@
 y el bot propone el gasto con Confirmar / Corregir. Nunca se guarda sin confirmación."""
 
 import logging
+import re
 import secrets
 from datetime import timedelta
 from html import escape
@@ -57,9 +58,17 @@ def _es_duplicado_de_correo(app, usuario: dict, mov: dict) -> bool:
     return False
 
 
+# Un correo que no trae ningún monto ($12.990, US$ 30, "Monto: 25.000") no puede ser un cargo:
+# se descarta sin llamar a Claude (las promociones con "30% dcto" cuestan $0).
+_RE_MONTO = re.compile(r"(\$|\b(clp|usd|mxn|us\$)\b)\s?\d|\bmonto\b\D{0,20}\d", re.IGNORECASE)
+
+
 async def procesar_pago(app, usuario: dict, texto: str, origen: str = "atajo") -> None:
     """Interpreta un aviso automático (celular o correo del banco) y le propone el movimiento al usuario."""
     origen = origen if origen in PREFIJO else "atajo"
+    if origen == "correo" and not _RE_MONTO.search(texto):
+        log.info("Correo de %s sin montos, se ignora sin usar la IA: %s", usuario["nombre"], texto[:80])
+        return
     pareja = finanzas.otro_usuario(usuario["id"])
     try:
         datos = await interprete.interpretar(
@@ -69,7 +78,8 @@ async def procesar_pago(app, usuario: dict, texto: str, origen: str = "atajo") -
             contexto=(CONTEXTO_CORREO.format(pareja=pareja["nombre"] if pareja else "sin pareja registrada")
                       if origen == "correo" else CONTEXTO_ATAJO),
             intencion=None if origen == "correo" else "movimientos",
-            intenciones_posibles=["movimientos", "pago_pareja", "otro"])
+            intenciones_posibles=["movimientos", "pago_pareja", "otro"],
+            motivo=origen, extraer_otro=origen != "correo")
     except interprete.ErrorInterprete:
         datos = {"intencion": "otro"}
     try:

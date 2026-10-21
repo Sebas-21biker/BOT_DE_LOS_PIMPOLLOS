@@ -3,6 +3,7 @@
 Claude solo traduce texto a datos; no calcula totales ni saldos.
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -11,7 +12,7 @@ from decimal import Decimal
 
 import anthropic
 
-from core import config, feriados
+from core import config, costos, feriados
 from core.finanzas import ZONA
 
 log = logging.getLogger(__name__)
@@ -258,7 +259,11 @@ class ErrorInterprete(Exception):
     pass
 
 
-async def _llamar(sistema: str, mensajes: list[dict], schema: dict) -> dict:
+async def _registrar_uso(modelo: str, motivo: str, respuesta) -> None:
+    await asyncio.to_thread(costos.registrar, modelo, motivo, respuesta.usage)
+
+
+async def _llamar(sistema: str, mensajes: list[dict], schema: dict, motivo: str = "mensaje") -> dict:
     modelo = config.claude_model()
     extra = {}
     if not modelo.startswith("claude-haiku"):
@@ -277,6 +282,7 @@ async def _llamar(sistema: str, mensajes: list[dict], schema: dict) -> dict:
     except anthropic.APIError as e:
         log.exception("Error llamando a Claude")
         raise ErrorInterprete("Pucha, no pude conectarme con la IA. Intenta de nuevo en un rato 🙏") from e
+    await _registrar_uso(modelo, motivo, respuesta)
     if respuesta.stop_reason != "end_turn":
         log.warning("Respuesta de Claude con stop_reason=%s", respuesta.stop_reason)
         raise ErrorInterprete("No logré cachar el mensaje. Prueba escribirlo de otra forma 🤔")
@@ -295,6 +301,8 @@ async def interpretar(
     imagen: bytes | None = None,
     intencion: str | None = None,
     intenciones_posibles: list[str] | None = None,
+    motivo: str = "mensaje",
+    extraer_otro: bool = True,
 ) -> dict:
     """Interpreta en dos pasos: (1) la intención, (2) los datos de esa intención con un schema chico.
 
@@ -336,13 +344,17 @@ async def interpretar(
     if intencion is None:
         # `intenciones_posibles` acota el paso 1 cuando el origen ya lo restringe (ej: un correo del banco).
         paso1 = await _llamar(sistema, base, _obj({"intencion": {"type": "string",
-                                                                 "enum": intenciones_posibles or INTENCIONES}}))
+                                                                 "enum": intenciones_posibles or INTENCIONES}}),
+                              motivo)
         intencion = paso1["intencion"]
 
-    # Paso 2: los datos de esa intención.
+    # Paso 2: los datos de esa intención. Si es "otro" y nadie va a leer la respuesta (avisos automáticos),
+    # no vale la pena gastar la segunda llamada.
     datos = {**{k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
                 for k, v in _VACIO.items()}, "intencion": intencion, "crudo": json.dumps({"intencion": intencion})}
     campos = _CAMPOS_POR_INTENCION.get(intencion)
+    if intencion == "otro" and not extraer_otro:
+        campos = None
     if campos:
         todos = _campos(categorias_gasto + categorias_ingreso)
         schema = _obj({"intencion": {"type": "string", "enum": sorted({intencion, "otro"})},
@@ -355,7 +367,7 @@ async def interpretar(
             mensajes = [{"role": "user", "content": base[0]["content"] + [{"type": "text", "text": instruccion}]}]
         else:
             mensajes = [{"role": "user", "content": f"{base[0]['content']}\n\n{instruccion}"}]
-        extraido = await _llamar(sistema, mensajes, schema)
+        extraido = await _llamar(sistema, mensajes, schema, motivo)
         datos.update(extraido)
         datos["crudo"] = json.dumps(extraido, ensure_ascii=False)
 
@@ -490,6 +502,7 @@ async def generar_menu(preferencias: str) -> dict:
     except anthropic.APIError as e:
         log.exception("Error generando menú")
         raise ErrorInterprete("Pucha, no pude armar el menú ahora. Intenta en un rato 🙏") from e
+    await _registrar_uso(config.claude_model(), "menu", respuesta)
     if respuesta.stop_reason != "end_turn":
         raise ErrorInterprete("No me salió el menú, pídemelo de nuevo 🙏")
     return json.loads(next(b.text for b in respuesta.content if b.type == "text"))
@@ -536,6 +549,7 @@ async def generar_ideas(pedido: str, contexto: str) -> dict:
     except anthropic.APIError as e:
         log.exception("Error generando ideas")
         raise ErrorInterprete("Pucha, no se me ocurrió nada ahora. Intenta en un rato 🙏") from e
+    await _registrar_uso(config.claude_model(), "ideas", respuesta)
     if respuesta.stop_reason != "end_turn":
         raise ErrorInterprete("No me salieron las ideas, pídemelas de nuevo 🙏")
     return json.loads(next(b.text for b in respuesta.content if b.type == "text"))

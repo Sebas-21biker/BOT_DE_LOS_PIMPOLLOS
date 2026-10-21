@@ -239,6 +239,7 @@ COMANDOS = [
     BotCommand("feriados", "Feriados y fechas especiales"),
     BotCommand("automatico", "Anotar pagos del celular automáticamente"),
     BotCommand("correo", "Anotar gastos desde los correos del banco"),
+    BotCommand("costo", "Cuánto va costando la IA este mes"),
     BotCommand("invitar", "Link para que tu pareja se una"),
     BotCommand("pague", "Anotar que le pagaste a tu pareja"),
     BotCommand("gasto", "Registro rápido de gasto"),
@@ -265,7 +266,8 @@ def _crear_app() -> Application:
     autorizados = AUTORIZADOS
     comandos = {
         "ayuda": ayuda, "invitar": pareja.cmd_invitar, "perfil": pareja.cmd_perfil, "ideas": pareja.cmd_ideas, "ultimos": plata.cmd_ultimos, "pregunta": pareja.cmd_pregunta, "feriados": pareja.cmd_feriados,
-        "automatico": automatico.cmd_automatico, "correo": automatico.cmd_correo, "dashboard": dashboard, "panel": panel,
+        "automatico": automatico.cmd_automatico, "correo": automatico.cmd_correo, "costo": consultas.cmd_costo,
+        "dashboard": dashboard, "panel": panel,
         "gasto": plata.gasto, "ingreso": plata.ingreso, "pague": plata.pague,
         "saldo": plata.saldo, "resumen": plata.resumen, "borrar_pruebas": plata.borrar_pruebas,
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
