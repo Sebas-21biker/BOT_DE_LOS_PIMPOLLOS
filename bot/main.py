@@ -40,7 +40,7 @@ AYUDA = (
     "📋 <b>Comandos</b>\n"
     "/panel · /dashboard · /ultimos · /saldo · /resumen · /semana · /metas · /lista · /tareas · /menu\n"
     "/recordatorios · /panoramas · /notas · /perfil · /ideas · /pregunta · /feriados · /invitar\n"
-    "📱 /automatico para que tus pagos con el celular se anoten solos (con tu confirmación)\n"
+    "📱 /automatico (pagos con el celular) y 🏦 /correo (correos del banco) para anotar solos, con tu confirmación\n"
     "/gasto, /ingreso y /pague para anotar rápido sin IA\n\n"
     "🧪 Si escribes <b>test</b> en un gasto o pago, lo anoto como prueba (no cuenta). "
     "Los borras con /borrar_pruebas"
@@ -238,6 +238,7 @@ COMANDOS = [
     BotCommand("pregunta", "Una pregunta para conocerse mejor"),
     BotCommand("feriados", "Feriados y fechas especiales"),
     BotCommand("automatico", "Anotar pagos del celular automáticamente"),
+    BotCommand("correo", "Anotar gastos desde los correos del banco"),
     BotCommand("invitar", "Link para que tu pareja se una"),
     BotCommand("pague", "Anotar que le pagaste a tu pareja"),
     BotCommand("gasto", "Registro rápido de gasto"),
@@ -264,7 +265,7 @@ def _crear_app() -> Application:
     autorizados = AUTORIZADOS
     comandos = {
         "ayuda": ayuda, "invitar": pareja.cmd_invitar, "perfil": pareja.cmd_perfil, "ideas": pareja.cmd_ideas, "ultimos": plata.cmd_ultimos, "pregunta": pareja.cmd_pregunta, "feriados": pareja.cmd_feriados,
-        "automatico": automatico.cmd_automatico, "dashboard": dashboard, "panel": panel,
+        "automatico": automatico.cmd_automatico, "correo": automatico.cmd_correo, "dashboard": dashboard, "panel": panel,
         "gasto": plata.gasto, "ingreso": plata.ingreso, "pague": plata.pague,
         "saldo": plata.saldo, "resumen": plata.resumen, "borrar_pruebas": plata.borrar_pruebas,
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
@@ -301,7 +302,8 @@ async def _correr() -> None:
         await app.start()
         await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
         runner = await dashboard_web.iniciar(
-            config.puerto_web(), al_recibir_pago=lambda usuario, texto: automatico.procesar_pago(app, usuario, texto))
+            config.puerto_web(),
+            al_recibir_pago=lambda usuario, texto, origen: automatico.procesar_pago(app, usuario, texto, origen))
         tareas = [asyncio.create_task(hogar.bucle_recordatorios(app.bot)),
                   asyncio.create_task(consultas.bucle_programados(app))]
         log.info("Bot iniciado en modo polling (modelo: %s, dashboard: %s)",

@@ -126,6 +126,23 @@ def ultimos_movimientos(usuario_id: int, busqueda: str = "", fecha: date | None 
         ).fetchall()
 
 
+def origenes_similares(usuario_id: int, monto: Decimal, moneda: str, fecha: date) -> list[str]:
+    """`mensaje_original` de los movimientos recientes del usuario con el mismo monto (±1 día).
+
+    Sirve para no anotar dos veces un pago que llegó por dos caminos (Apple Pay y correo del banco).
+    """
+    with conectar() as conn:
+        return [r["mensaje_original"] or "" for r in conn.execute(
+            """
+            SELECT mensaje_original FROM movimientos
+            WHERE pagado_por = %s AND monto = %s AND moneda = %s
+              AND fecha BETWEEN %s::date - 1 AND %s::date + 1
+              AND creado_en > NOW() - interval '3 days'
+            """,
+            (usuario_id, monto, moneda, fecha, fecha),
+        )]
+
+
 def actualizar_movimiento(movimiento_id: int, usuario_id: int, *, monto: Decimal, categoria_id: int,
                           descripcion: str, fecha: date, repartos: dict[int, Decimal] | None) -> bool:
     """Reemplaza los datos de un movimiento propio. Mantiene el tipo de cambio con que se registró."""

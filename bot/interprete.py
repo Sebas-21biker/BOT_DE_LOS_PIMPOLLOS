@@ -294,6 +294,7 @@ async def interpretar(
     contexto: str | None = None,
     imagen: bytes | None = None,
     intencion: str | None = None,
+    intenciones_posibles: list[str] | None = None,
 ) -> dict:
     """Interpreta en dos pasos: (1) la intención, (2) los datos de esa intención con un schema chico.
 
@@ -333,7 +334,9 @@ async def interpretar(
 
     # Paso 1: solo la intención.
     if intencion is None:
-        paso1 = await _llamar(sistema, base, _obj({"intencion": {"type": "string", "enum": INTENCIONES}}))
+        # `intenciones_posibles` acota el paso 1 cuando el origen ya lo restringe (ej: un correo del banco).
+        paso1 = await _llamar(sistema, base, _obj({"intencion": {"type": "string",
+                                                                 "enum": intenciones_posibles or INTENCIONES}}))
         intencion = paso1["intencion"]
 
     # Paso 2: los datos de esa intención.

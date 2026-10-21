@@ -97,6 +97,13 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 - Pagos automáticos (`bot/automatico.py`): POST /auto/{token} (token por usuario en `usuarios.token_auto`,
   /automatico lo entrega con instrucciones para Atajos de iPhone y MacroDroid). El aviso se interpreta y
   SIEMPRE se propone con Confirmar/Corregir; duplicados en 3 minutos se ignoran.
+- Correos del banco (/correo): el usuario instala en SU Gmail un Apps Script
+  (`bot/plantillas/pimpollo_gmail.gs`, con su URL secreta incrustada) que cada 5 min manda al mismo
+  /auto/{token} los correos con la etiqueta "Pimpollo" (origen "correo", id del correo). El bot nunca tiene
+  acceso al Gmail. En correos: el paso 1 se acota a movimientos/pago_pareja/otro; lo que no es movimiento
+  (promos, claves, estados de cuenta) se ignora en silencio; transferencias con la pareja → pago_pareja.
+  Antiduplicados: un correo con el mismo monto (±1 día) que un pago llegado por otro camino (Apple Pay o a
+  mano) se descarta como "eco" (registrado en envios_programados con prefijo eco:).
 - `bot/plata.py`: gastos/ingresos/pagos (con Confirmar/Corregir), /saldo, /resumen, /pague, avisos.
 - `bot/hogar.py`: metas, lista de compras, recordatorios, panoramas y notas de la casa.
 - `bot/comun.py`: utilidades compartidas.

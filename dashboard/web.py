@@ -101,12 +101,15 @@ async def _pago_automatico(request: web.Request) -> web.Response:
     if usuario is None:
         raise web.HTTPNotFound(text="Token inválido")
     crudo = await request.text()
+    origen, id_externo = "atajo", None
     try:
         cuerpo = json.loads(crudo)
         texto = cuerpo.get("texto") or " ".join(str(cuerpo.get(k, "")) for k in ("monto", "comercio", "detalle"))
+        origen = str(cuerpo.get("origen") or "atajo")
+        id_externo = cuerpo.get("id")  # el script de Gmail manda el id del correo
     except (ValueError, AttributeError):
         texto = crudo
-    texto = " ".join(str(texto).split())[:500]
+    texto = " ".join(str(texto).split())[:1500 if origen == "correo" else 500]
     if not texto:
         raise web.HTTPBadRequest(text="Falta el texto del pago")
 
@@ -115,12 +118,12 @@ async def _pago_automatico(request: web.Request) -> web.Response:
     for clave, momento in list(recientes.items()):
         if ahora - momento > VENTANA_DUPLICADOS:
             del recientes[clave]
-    clave = (usuario["id"], texto.lower())
+    clave = (usuario["id"], id_externo or texto.lower())
     if clave in recientes:
         return web.json_response({"ok": True, "duplicado": True})
     recientes[clave] = ahora
 
-    asyncio.create_task(request.app["al_recibir_pago"](usuario, texto))
+    asyncio.create_task(request.app["al_recibir_pago"](usuario, texto, origen))
     return web.json_response({"ok": True})
 
 
