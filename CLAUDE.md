@@ -70,6 +70,17 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 - Movimientos de prueba: si el mensaje trae "test" o "#prueba" se guardan con `es_prueba = true`.
   Toda consulta de saldos/resúmenes/dashboards debe filtrar `NOT es_prueba`. /borrar_pruebas los elimina.
 
+## Evolución a asistente proactivo (plan aprobado 2026-11-05)
+- Fase 0 (hecha): filtro del grupo, estado persistente, privacidad de regalos, precio de caché en /costo, tests.
+- Fase A: conversación en el grupo con iniciativa. Buffer temporal de mensajes (48 h), se evalúa el tramo cuando la
+  charla se pausa; clasificador con **Claude Haiku 5.5** (variable CLAUDE_MODEL_CLASIFICADOR), redacción con el
+  modelo principal. **Horario de descanso 22:30–8:30**. **Nivel de iniciativa inicial: bajo** (cooldown, máx. por
+  día, botones 👍/🤫). Nunca fingir emociones ni recuerdos.
+- Fase B: memoria `recuerdos` (migra `perfil`): usuario, categoría, confianza, origen, visibilidad, vigencia;
+  lo inferido se pregunta antes de guardar. Búsqueda con full-text de Postgres (sin embeddings por ahora). Tabla `planes`.
+- Fase C: disparadores proactivos con motivo verificable por SQL, cooldown y horario de descanso.
+- Fase D (postergada): Google Maps/Places y Spotify más adelante; Calendar/Sheets/Drive no por ahora.
+
 ## Decisiones pendientes
 - Visibilidad de ingresos individuales (por ahora /resumen muestra solo los ingresos propios)
 
@@ -123,7 +134,19 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
   en `tipos_cambio`; `monto_base` queda en CLP.
 - Tareas de la casa con turnos (`tareas`), menú semanal generado por Claude con ingredientes a la lista.
 - En grupos: /panel fija accesos directos; el bot conversa solo si lo nombran ("pimpollo") o le responden.
-  Requiere privacy mode desactivado en BotFather.
+  Requiere privacy mode desactivado en BotFather (verificado: `getMe` → can_read_all_group_messages = true;
+  si se cambia, hay que sacar y volver a agregar el bot al grupo).
+- Filtro del grupo (`bot/conversacion.py`): el bot recibe TODA la charla, pero solo pasa a la IA lo que le
+  habla, trae un monto o suena a algo que sabe hacer (palabras clave + nombres de tareas). El resto no gasta
+  tokens. Fotos del grupo: solo si el texto dice boleta/anota/un monto o responden al bot. En `uso_ia` los
+  mensajes del grupo van con motivo "grupo". La pregunta pimpolla (privada) no se responde con charla del grupo.
+- Estado persistente (`core/estado.py`, tabla `estado_bot`): bot_data y user_data de python-telegram-bot se
+  guardan en Postgres (pickle) cada 15 s y al recibir SIGTERM. Las colecciones de bot_data se podan a las
+  últimas 100. Si se cambia user_data fuera de un handler, llamar `app.mark_data_for_update_persistence`.
+- Ideas de regalo sorpresa: un dato "regalos" que una persona anotó sobre la otra no lo ve la festejada (ni en
+  /perfil ni en el contexto de las ideas), y en el grupo no se muestra (`perfil.visibles_para`).
+- Tests: `pytest` (requirements-dev.txt). No tocan la base ni la API: el .env local apunta a producción, así que
+  tampoco correr el bot en local con ese .env (le robaría los mensajes al de Railway).
 
 ## Personalidad del bot
 "Pimpollo": amigo chileno buena onda. Modismos suaves (wena, cachai, al tiro, pucha), frases cortas,

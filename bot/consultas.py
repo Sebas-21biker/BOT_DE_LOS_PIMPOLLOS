@@ -16,7 +16,7 @@ from telegram.constants import ChatAction
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from bot import comun, interprete, plata
+from bot import comun, conversacion, interprete, plata
 from bot import hogar as hogar_bot
 from bot import pareja
 from core import cambio, config, costos, finanzas, hogar, metas, reportes
@@ -101,7 +101,12 @@ async def foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if usuario is None:
         return
     caption = update.message.caption or ""
-    if not comun.es_grupo(update):
+    if comun.es_grupo(update):
+        respuesta_a = update.message.reply_to_message
+        le_responde = respuesta_a is not None and respuesta_a.from_user.id == context.bot.id
+        if not le_responde and not conversacion.foto_merece_ia(caption):
+            return  # memes y fotos del grupo no se mandan a la IA (para boletas: "boleta", "anota", un monto...)
+    else:
         await update.message.chat.send_action(ChatAction.TYPING)
     archivo = await update.message.photo[-1].get_file()
     imagen = bytes(await archivo.download_as_bytearray())
@@ -122,7 +127,7 @@ async def foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ---------- costo de la IA ----------
 
-MOTIVOS = {"mensaje": "💬 Mensajes", "correo": "🏦 Correos del banco", "atajo": "📱 Pagos con el celular",
+MOTIVOS = {"mensaje": "💬 Mensajes", "grupo": "👥 Mensajes del grupo", "correo": "🏦 Correos del banco", "atajo": "📱 Pagos con el celular",
            "foto": "📷 Fotos de boletas", "menu": "🍽️ Menús", "ideas": "💡 Ideas"}
 
 

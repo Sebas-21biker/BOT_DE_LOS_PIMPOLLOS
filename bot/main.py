@@ -5,6 +5,7 @@ Uso: python -m bot.main
 
 import asyncio
 import logging
+import signal
 from html import escape
 
 from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonCommands,
@@ -14,8 +15,8 @@ from telegram.error import TelegramError
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           filters)
 
-from bot import automatico, comun, consultas, hogar, interprete, pareja, plata
-from core import config, db, finanzas, metas
+from bot import automatico, comun, consultas, conversacion, hogar, interprete, pareja, plata
+from core import config, db, estado, finanzas, metas
 from core import hogar as hogar_core
 from dashboard import web as dashboard_web
 
@@ -161,10 +162,21 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     texto = update.message.text
     grupo = comun.es_grupo(update)
+    tareas = [t["nombre"] for t in hogar_core.listar_tareas()]
+
+    esperando = context.user_data.get("esperando")
+    if grupo and esperando and esperando.get("tipo") == "pregunta":
+        esperando = None  # la pregunta pimpolla se hizo por privado: se responde allá, no con la charla del grupo
+
+    # En el grupo el bot recibe toda la conversación: la charla normal no pasa por la IA (no gasta tokens).
+    if (grupo and esperando is None and "corrigiendo" not in context.user_data
+            and not _le_hablan(update, context) and not conversacion.merece_ia(texto, tareas)):
+        return
 
     # ¿Responde a una pregunta del bot (monto de un aporte, total de la compra...)?
     contexto = intencion_forzada = movimiento_id = None
-    if esperando := context.user_data.pop("esperando", None):
+    if esperando:
+        context.user_data.pop("esperando", None)
         resultado = await hogar.manejar_esperando(update, context, usuario, esperando)
         if resultado is None:
             return
@@ -184,8 +196,9 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         datos = await interprete.interpretar(
             comun.sin_marca_prueba(texto), finanzas.ahora(),
             finanzas.nombres_categorias("gasto"), finanzas.nombres_categorias("ingreso"),
-            [m["nombre"] for m in metas.listar()], [t["nombre"] for t in hogar_core.listar_tareas()],
+            [m["nombre"] for m in metas.listar()], tareas,
             anterior=anterior, contexto=contexto, intencion=intencion_forzada,
+            motivo="grupo" if grupo else "mensaje",
         )
     except interprete.ErrorInterprete as e:
         await update.message.reply_text(str(e))
@@ -275,7 +288,8 @@ def _crear_app() -> Application:
         "tareas": hogar.cmd_tareas, "menu": _cmd_menu,
     }
 
-    app = Application.builder().token(config.telegram_bot_token()).build()
+    # El estado (propuestas por confirmar, respuestas esperadas...) se guarda en Postgres: sobrevive a los deploys.
+    app = Application.builder().token(config.telegram_bot_token()).persistence(estado.PersistenciaPostgres()).build()
     app.add_handler(CommandHandler("start", start))  # abierto: valida invitaciones
     for nombre, handler in comandos.items():
         app.add_handler(CommandHandler(nombre, handler, filters=autorizados))
@@ -310,8 +324,14 @@ async def _correr() -> None:
                   asyncio.create_task(consultas.bucle_programados(app))]
         log.info("Bot iniciado en modo polling (modelo: %s, dashboard: %s)",
                  config.claude_model(), config.dashboard_url() or "sin URL pública")
+        detener = asyncio.Event()
         try:
-            await asyncio.Event().wait()
+            # Railway manda SIGTERM al redesplegar: se apaga ordenado para guardar el estado antes de salir.
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, detener.set)
+        except (NotImplementedError, AttributeError):
+            pass  # Windows (local): no hay add_signal_handler; Ctrl+C igual cierra ordenado
+        try:
+            await detener.wait()
         finally:
             for tarea in tareas:
                 tarea.cancel()

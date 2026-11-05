@@ -49,14 +49,18 @@ def _quien(sobre: str, usuario: dict, pareja: dict | None) -> int | None:
 async def guardar_perfil(update: Update, usuario: dict, datos: list[dict]) -> None:
     pareja = finanzas.otro_usuario(usuario["id"])
     ids, lineas = [], []
+    sorpresa_en_grupo = comun.es_grupo(update) and any(
+        d["categoria"] == "regalos" and d["sobre"] == "pareja" for d in datos)
     for d in datos:
         uid = _quien(d["sobre"], usuario, pareja)
         ids.append(perfil.guardar(uid, d["categoria"], d["dato"], usuario["id"]))
         sobre = ("De los dos" if uid is None else "Sobre ti" if uid == usuario["id"]
                  else f"Sobre {escape(primer_nombre(pareja))}")
         lineas.append(f"{perfil.CATEGORIAS[d['categoria']].split()[0]} {sobre}: {escape(d['dato'])}")
+    nota = ("\n\n🤫 <i>Ojo: las ideas de regalo mejor cuéntamelas por privado, que acá tu pareja las ve. "
+            "Igual no se las voy a mostrar.</i>") if sorpresa_en_grupo else ""
     await update.effective_message.reply_text(
-        "💝 Anotado, no se me olvida:\n" + "\n".join(lineas), parse_mode="HTML",
+        "💝 Anotado, no se me olvida:\n" + "\n".join(lineas) + nota, parse_mode="HTML",
         reply_markup=teclado([boton("↩️ Deshacer", "borrar:perfil:" + ",".join(map(str, ids)))]))
 
 
@@ -89,6 +93,7 @@ async def ver_perfil(update: Update, usuario: dict, filtro: dict | None = None) 
         filas = perfil.listar(solo_de_los_dos=True, categoria=categoria)
     else:
         filas = perfil.listar(_quien(filtro["sobre"], usuario, pareja), categoria=categoria)
+    filas = perfil.visibles_para(filas, usuario["id"], comun.es_grupo(update))
     if not filas:
         await update.effective_message.reply_text(
             "🤔 Todavía no sé eso. Cuéntenme cosas, tipo:\n"
@@ -104,7 +109,7 @@ async def cmd_perfil(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if usuario is None:
         return
     await ver_perfil(update, usuario)
-    filas = perfil.listar()
+    filas = perfil.visibles_para(perfil.listar(), usuario["id"], comun.es_grupo(update))
     if filas:
         botones = [[boton(f"🗑️ {f['dato'][:40]}", f"borrar:perfil:{f['id']}")] for f in filas[:20]]
         await update.effective_message.reply_text("¿Algo ya no corre? Tócalo para borrarlo:",
@@ -118,7 +123,7 @@ def _estacion(mes: int) -> str:
             6: "invierno", 7: "invierno", 8: "invierno"}.get(mes, "primavera")
 
 
-def _contexto_ideas(usuario: dict, recientes: list[str]) -> str:
+def _contexto_ideas(usuario: dict, recientes: list[str], en_grupo: bool = False) -> str:
     pareja = finanzas.otro_usuario(usuario["id"])
     hoy = finanzas.hoy()
     lineas = [f"Hoy: {comun.DIAS[hoy.weekday()]} {hoy:%Y-%m-%d} ({_estacion(hoy.month)} en Chile).",
@@ -128,7 +133,8 @@ def _contexto_ideas(usuario: dict, recientes: list[str]) -> str:
         lineas += ["", "Feriados y fechas especiales del próximo mes:"]
         lineas += [f"- {f['fecha']:%Y-%m-%d} ({comun.DIAS[f['fecha'].weekday()]}): {f['nombre']}" for f in proximos]
     lineas += ["", "Perfil (contexto opcional; usa solo lo relacionado con lo que piden):"]
-    filas = perfil.listar()
+    # Las ideas de regalo secretas sobre quien pide (o todas, si es en el grupo) no entran: arruinarían la sorpresa.
+    filas = perfil.visibles_para(perfil.listar(), usuario["id"], en_grupo)
     lineas += [f"- {f['nombre'] or 'De los dos'} / {f['categoria']}: {f['dato']}" for f in filas] or ["- (vacío)"]
     pendientes = hogar.panoramas_pendientes()
     if pendientes:
@@ -139,10 +145,11 @@ def _contexto_ideas(usuario: dict, recientes: list[str]) -> str:
     return "\n".join(lineas)
 
 
-async def armar_ideas(usuario: dict, pedido: str, bot_data: dict, titulo: str = "💡 <b>Ideas para ustedes</b>"):
+async def armar_ideas(usuario: dict, pedido: str, bot_data: dict, titulo: str = "💡 <b>Ideas para ustedes</b>",
+                      en_grupo: bool = False):
     """Genera ideas y devuelve (texto HTML, botones para guardarlas). Lanza ErrorInterprete si falla."""
     recientes: list = bot_data.setdefault("ideas_recientes", [])
-    resultado = await interprete.generar_ideas(pedido, _contexto_ideas(usuario, recientes))
+    resultado = await interprete.generar_ideas(pedido, _contexto_ideas(usuario, recientes, en_grupo))
     ideas = resultado["ideas"][:5]
     recientes.extend(i["titulo"] for i in ideas)
     del recientes[:-20]  # memoria de las últimas 20 ideas
@@ -162,7 +169,7 @@ async def pedir_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE, usuari
     if not comun.es_grupo(update):
         await update.effective_chat.send_action("typing")
     try:
-        texto, botones = await armar_ideas(usuario, pedido, context.bot_data)
+        texto, botones = await armar_ideas(usuario, pedido, context.bot_data, en_grupo=comun.es_grupo(update))
     except interprete.ErrorInterprete as e:
         await update.effective_message.reply_text(str(e))
         return
@@ -181,6 +188,7 @@ async def enviar_pregunta(app, usuario: dict) -> bool:
     hogar.reservar_envio(f"pregunta-{usuario['id']}-{indice}")
     pregunta = preguntas.PREGUNTAS[indice]
     app.user_data[usuario["telegram_id"]]["esperando"] = {"tipo": "pregunta", "pregunta": pregunta}
+    app.mark_data_for_update_persistence(user_ids=usuario["telegram_id"])  # se cambió fuera de un handler
     await app.bot.send_message(
         usuario["telegram_id"],
         f"💬 <b>Pregunta pimpolla</b>\n{escape(pregunta)}\n\n<i>Respóndeme normal y lo guardo en tu perfil "

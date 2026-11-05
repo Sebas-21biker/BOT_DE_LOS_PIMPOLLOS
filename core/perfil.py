@@ -22,7 +22,7 @@ def listar(usuario_id: int | None = None, solo_de_los_dos: bool = False, categor
     with conectar() as conn:
         return conn.execute(
             """
-            SELECT p.id, p.usuario_id, p.categoria, p.dato, u.nombre
+            SELECT p.id, p.usuario_id, p.categoria, p.dato, p.creado_por, u.nombre
             FROM perfil p LEFT JOIN usuarios u ON u.id = p.usuario_id
             WHERE (%(uid)s::int IS NULL OR p.usuario_id = %(uid)s::int)
               AND (NOT %(dos)s OR p.usuario_id IS NULL)
@@ -36,3 +36,14 @@ def listar(usuario_id: int | None = None, solo_de_los_dos: bool = False, categor
 def borrar(dato_id: int) -> bool:
     with conectar() as conn:
         return conn.execute("DELETE FROM perfil WHERE id = %s", (dato_id,)).rowcount > 0
+
+
+def es_sorpresa(fila: dict) -> bool:
+    """Idea de regalo que una persona anotó sobre la OTRA: es secreta para la festejada."""
+    return (fila["categoria"] == "regalos" and fila["usuario_id"] is not None
+            and fila.get("creado_por") is not None and fila["usuario_id"] != fila["creado_por"])
+
+
+def visibles_para(filas: list[dict], usuario_id: int, en_grupo: bool = False) -> list[dict]:
+    """Quita las sorpresas sobre `usuario_id`. En un grupo los dos ven el chat: se quitan todas las sorpresas."""
+    return [f for f in filas if not (es_sorpresa(f) and (en_grupo or f["usuario_id"] == usuario_id))]
