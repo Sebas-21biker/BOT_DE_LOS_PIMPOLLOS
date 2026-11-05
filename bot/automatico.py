@@ -17,7 +17,11 @@ from core import config, db, finanzas, hogar, metas
 log = logging.getLogger(__name__)
 
 CATEGORIAS_COMERCIO = ("Usa el comercio como descripción y para elegir la categoría (Metro, Red, Uber, Copec → "
-                       "Transporte; Lider, Jumbo, Unimarc → Supermercado; restoranes y cafés → Comida fuera...).")
+                       "Transporte; Lider, Jumbo, Unimarc → Supermercado; restoranes y cafés → Comida fuera...). "
+                       "Limpia el nombre del comercio para que sea legible: quita prefijos de medios de pago "
+                       "(MERPAGO*, MP*, SUMUP*, PAYU*, TUU*, DLO*, PAYPAL*), separa palabras pegadas y quita letras "
+                       "sueltas del final (ej: 'MERPAGO*ECOBIKESHOPLI' → 'Ecobike Shop'). No agregues el medio de "
+                       "pago ni 'compra con tarjeta' a la descripción.")
 
 CONTEXTO_ATAJO = ("Es una notificación AUTOMÁTICA de un pago hecho con el celular o una tarjeta (no la escribió el "
                   "usuario). Es un gasto individual de quien pagó, con fecha de hoy salvo que diga otra. "
