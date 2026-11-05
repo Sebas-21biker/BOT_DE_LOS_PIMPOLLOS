@@ -140,7 +140,9 @@ async def cmd_correo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "(Sale ese aviso porque el script es tuyo y no está publicado; es normal.)\n"
         "• Elige la función <b>probar</b> → ▶ <b>Ejecutar</b>: te debería llegar un mensaje mío al tiro 🧪.\n\n"
         "Listo: desde ahí reviso cada 5 minutos. Los correos que no sean cargos (promos, claves) los ignoro, "
-        "y si un pago ya llegó por Apple Pay no te pregunto dos veces 😉",
+        "y si un pago ya llegó por Apple Pay no te pregunto dos veces 😉\n\n"
+        "🔧 ¿No te llegan? Ejecuta la función <b>diagnosticar</b> y mira el <b>Registro de ejecución</b>: "
+        "te dice si falta la etiqueta, el revisor automático o qué pasó con cada correo.",
         parse_mode="HTML", disable_web_page_preview=True)
     await update.effective_message.reply_document(
         InputFile(script.encode("utf-8"), filename="pimpollo_gmail.gs"),

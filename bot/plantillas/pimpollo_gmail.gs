@@ -67,6 +67,44 @@ function desinstalar() {
   });
 }
 
+/**
+ * Muestra (sin enviar nada) qué está viendo el script: si la etiqueta existe, si el revisor automático
+ * está activo y qué correos con la etiqueta encontró, indicando por qué se mandarían o no.
+ * Resultado en el "Registro de ejecución" de abajo.
+ */
+function diagnosticar() {
+  const props = PropertiesService.getScriptProperties();
+  const instalado = Number(props.getProperty("INSTALADO_EN") || 0);
+  const enviados = JSON.parse(props.getProperty("ENVIADOS") || "[]");
+  const disparadores = ScriptApp.getProjectTriggers().filter(function (t) {
+    return t.getHandlerFunction() === "revisarCorreos";
+  });
+
+  console.log("1) Etiqueta \"" + ETIQUETA + "\": " + (GmailApp.getUserLabelByName(ETIQUETA) ? "✅ existe" :
+              "❌ NO existe (revisa el nombre exacto de la etiqueta del filtro)"));
+  console.log("2) Revisor automático (cada 5 min): " + (disparadores.length ? "✅ activo" :
+              "❌ NO está activo → ejecuta la función instalar"));
+  console.log("3) Instalado el: " + (instalado ? new Date(instalado).toLocaleString() :
+              "❌ nunca → ejecuta la función instalar") + " · correos enviados al bot hasta ahora: " + enviados.length);
+
+  const hilos = GmailApp.search("label:" + ETIQUETA + " newer_than:7d", 0, 20);
+  console.log("4) Correos con la etiqueta en los últimos 7 días: " + hilos.length + " conversación(es)");
+  if (!hilos.length) {
+    console.log("   ❌ Ninguno: el filtro de Gmail no les está poniendo la etiqueta. Abre un correo de compra del " +
+                "banco y revisa que tenga la etiqueta \"" + ETIQUETA + "\" y que el remitente del filtro sea igual.");
+  }
+  hilos.forEach(function (hilo) {
+    hilo.getMessages().forEach(function (correo) {
+      const fecha = correo.getDate();
+      let estado = "✅ se mandaría";
+      if (enviados.indexOf(correo.getId()) !== -1) estado = "✔️ ya se mandó al bot";
+      else if (fecha.getTime() < instalado) estado = "⏭️ llegó ANTES de instalar (se ignora a propósito)";
+      console.log("   • " + fecha.toLocaleString() + " | " + correo.getFrom() + " | " + correo.getSubject() +
+                  " → " + estado);
+    });
+  });
+}
+
 function probar() {
   const respuesta = UrlFetchApp.fetch(URL_PIMPOLLO, {
     method: "post",
