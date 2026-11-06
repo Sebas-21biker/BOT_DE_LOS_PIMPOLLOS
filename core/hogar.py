@@ -274,3 +274,36 @@ def todas_las_notas() -> list[dict]:
 def borrar_nota(nota_id: int) -> bool:
     with conectar() as conn:
         return conn.execute("DELETE FROM notas WHERE id = %s", (nota_id,)).rowcount > 0
+
+
+# ---------- planes (con fecha) ----------
+
+
+def crear_planes(planes: list[dict], usuario_id: int, mensaje: str) -> list[int]:
+    with conectar() as conn:
+        return [conn.execute(
+            """INSERT INTO planes (titulo, fecha, hora, lugar, con_quien, creado_por, mensaje_original)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (p["titulo"], p["fecha"], p["hora"], p["lugar"] or None, p["con_quien"] or None, usuario_id, mensaje),
+        ).fetchone()["id"] for p in planes]
+
+
+def proximos_planes(dias: int = 60) -> list[dict]:
+    with conectar() as conn:
+        return conn.execute(
+            """SELECT id, titulo, fecha, hora, lugar, con_quien FROM planes
+               WHERE estado = 'pendiente'
+                 AND fecha BETWEEN (NOW() AT TIME ZONE 'America/Santiago')::date
+                               AND (NOW() AT TIME ZONE 'America/Santiago')::date + %s::int
+               ORDER BY fecha, hora NULLS LAST""", (dias,)).fetchall()
+
+
+def cambiar_estado_plan(plan_id: int, estado: str) -> bool:
+    with conectar() as conn:
+        return conn.execute("UPDATE planes SET estado = %s WHERE id = %s AND estado = 'pendiente'",
+                            (estado, plan_id)).rowcount > 0
+
+
+def borrar_planes(ids: list[int]) -> int:
+    with conectar() as conn:
+        return conn.execute("DELETE FROM planes WHERE id = ANY(%s)", (ids,)).rowcount

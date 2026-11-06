@@ -317,6 +317,47 @@ async def cb_panorama(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                                            parse_mode="HTML")
 
 
+# ---------- planes (con fecha) ----------
+
+def _texto_plan(p: dict) -> str:
+    cuando = comun.formatear_fecha(p["fecha"]) + (f" a las {p['hora']:%H:%M}" if p.get("hora") else "")
+    extra = "".join(f" · {escape(x)}" for x in (p.get("lugar"), p.get("con_quien") and f"con {p['con_quien']}") if x)
+    return f"📅 <b>{escape(p['titulo'])}</b> — {cuando} ({comun.DIAS[p['fecha'].weekday()]}){extra}"
+
+
+async def _crear_planes(update: Update, context: ContextTypes.DEFAULT_TYPE, usuario: dict, planes: list[dict]) -> None:
+    ids = hogar.crear_planes(planes, usuario["id"], update.effective_message.text or "")
+    lineas = "\n".join(_texto_plan(p) for p in planes)
+    await update.effective_message.reply_text(
+        f"🗓️ Anotado en los planes:\n{lineas}", parse_mode="HTML",
+        reply_markup=teclado([boton("↩️ Deshacer", "borrar:plan:" + ",".join(map(str, ids)))]))
+    await comun.avisar_pareja(context.bot, update, usuario,
+                              f"🗓️ {escape(comun.primer_nombre(usuario))} anotó un plan:\n{lineas}")
+
+
+async def cmd_planes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await comun.usuario_o_aviso(update) is None:
+        return
+    lista = hogar.proximos_planes()
+    if not lista:
+        await update.effective_message.reply_text(
+            "🗓️ No hay planes en los próximos dos meses.\nAnoten uno: <i>el sábado vamos al asado de Juan</i>",
+            parse_mode="HTML")
+        return
+    lineas = ["🗓️ <b>Próximos planes</b>", ""] + [_texto_plan(p) for p in lista]
+    filas = [[boton(f"❌ Cancelar {p['titulo'][:30]}", f"plan:cancelado:{p['id']}")] for p in lista[:10]]
+    await update.effective_message.reply_text("\n".join(lineas), parse_mode="HTML", reply_markup=teclado(*filas))
+
+
+async def cb_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if await comun.usuario_de_boton(query) is None:
+        return
+    _, estado, plan_id = query.data.split(":")
+    ok = hogar.cambiar_estado_plan(int(plan_id), estado)
+    await query.answer("Listo, plan cancelado" if ok else "Ese plan ya no estaba pendiente")
+
+
 # ---------- notas de la casa ----------
 
 async def _guardar_notas(update: Update, usuario: dict, notas: list[dict]) -> None:
@@ -502,6 +543,8 @@ async def cb_borrar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ok = hogar.borrar_tarea(ids[0])
     elif tipo == "perfil":
         ok = sum(perfil.borrar(i) for i in ids) > 0
+    elif tipo == "plan":
+        ok = hogar.borrar_planes(ids) > 0
     else:
         ok = False
     if ok:
@@ -549,6 +592,10 @@ async def manejar_intencion(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await _tarea_hecha(update, context, usuario, tarea["id"])
     elif intencion == "menu_semanal":
         await _menu_semanal(update, context, datos["busqueda"])
+    elif intencion == "plan_nuevo":
+        await _crear_planes(update, context, usuario, datos["planes"])
+    elif intencion == "ver_planes":
+        await cmd_planes(update, context)
     else:
         return False
     return True

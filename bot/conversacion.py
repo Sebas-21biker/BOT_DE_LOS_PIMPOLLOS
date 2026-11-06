@@ -249,6 +249,7 @@ async def _evaluar(app, chat_id: int, tramo: list[dict], ahora: datetime) -> Non
         return
     await _quizas_intervenir(app, chat_id, tramo, texto, ev, prefs, ahora)
     await _avisar_deseos(app, ev, usuarios, ahora)
+    await _preguntar_datos(app, ev, usuarios, ahora)
 
 
 def _contexto_intervencion() -> str:
@@ -258,6 +259,9 @@ def _contexto_intervencion() -> str:
     proximos = feriados.proximos(hoy, dias=30)
     if proximos:
         lineas.append("Fechas cercanas: " + "; ".join(f"{f['nombre']} {f['fecha']:%d-%m}" for f in proximos))
+    planes = hogar.proximos_planes(dias=14)
+    if planes:
+        lineas.append("Planes que ya tienen: " + "; ".join(f"{p['titulo']} el {p['fecha']:%d-%m}" for p in planes))
     panoramas = hogar.panoramas_pendientes()[:15]
     if panoramas:
         lineas.append("Panoramas que tienen anotados: " + "; ".join(f"{p['titulo']} ({p['tipo']})" for p in panoramas))
@@ -319,6 +323,67 @@ async def _avisar_deseos(app, ev: dict, usuarios: list[dict], ahora: datetime) -
                       "se lo voy a mostrar.", parse_mode="HTML", reply_markup=teclado(*botones))
         except TelegramError:
             log.warning("No pude avisar un deseo a %s", destino["nombre"])
+
+
+def decidir_dato(dato: str, ahora: datetime, prefs: dict, anteriores: list[dict], ya_lo_se: bool) -> bool:
+    """¿Se le pregunta a la persona (por privado) si guardamos algo que dijo de sí misma en el grupo?
+    Como mucho una pregunta al día por persona, nunca lo mismo dos veces y nunca algo que ya está en la memoria."""
+    if NIVELES.get(prefs["nivel"]) is None or en_descanso(ahora) or ya_lo_se:
+        return False
+    if any(normalizar(a["texto"]) == normalizar(dato) for a in anteriores):
+        return False
+    return not any(ahora - a["creado_en"] < timedelta(days=1) for a in anteriores)
+
+
+async def _preguntar_datos(app, ev: dict, usuarios: list[dict], ahora: datetime) -> None:
+    for d in ev.get("datos", []):
+        quien = next((u for u in usuarios if u["nombre"] == d["quien"]), None)
+        if quien is None:
+            continue
+        chat = quien["telegram_id"]  # se le pregunta a quien lo dijo, nunca a la otra persona
+        dato = d["dato"].strip()
+        prefs = await asyncio.to_thread(iniciativa.preferencias, chat)
+        anteriores = await asyncio.to_thread(iniciativa.intervenciones_recientes, chat, "dato", 60)
+        ya_lo_se = await asyncio.to_thread(perfil.ya_existe, quien["id"], dato)
+        if not decidir_dato(dato, ahora, prefs, anteriores, ya_lo_se):
+            continue
+        iid = await asyncio.to_thread(iniciativa.registrar_intervencion, chat, "dato", d["categoria"], 0, dato)
+        try:
+            await app.bot.send_message(
+                chat, f"🤔 En el grupo te escuché algo que me sirve para conocerte: <i>{escape(dato)}</i>.\n"
+                      "¿Lo guardo en tu perfil? (lo verían los dos)", parse_mode="HTML",
+                reply_markup=teclado([boton("✅ Sí", f"rec:si:{iid}:{quien['id']}"),
+                                      boton("❌ No", f"rec:no:{iid}:{quien['id']}")]))
+        except TelegramError:
+            log.warning("No pude preguntarle un dato a %s", quien["nombre"])
+
+
+async def cb_dato_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Respuesta a "¿lo guardo en tu perfil?". Solo la persona de quien es el dato puede confirmarlo."""
+    query = update.callback_query
+    usuario = await comun.usuario_de_boton(query)
+    if usuario is None:
+        return
+    _, respuesta, iid, uid = query.data.split(":")
+    if int(uid) != usuario["id"]:
+        await query.answer("Esto lo confirma la otra persona 🙏", show_alert=True)
+        return
+    fila = await asyncio.to_thread(iniciativa.reaccionar, int(iid), "util" if respuesta == "si" else "silencio")
+    if fila is None:
+        await query.answer("Ya me respondiste 👌")
+        return
+    if respuesta == "no":
+        await query.answer("Ok, no lo guardo")
+        await query.edit_message_text("👌 Listo, no lo guardé.")
+        return
+    recientes = await asyncio.to_thread(iniciativa.intervenciones_recientes, usuario["telegram_id"], "dato", 60)
+    pedido = next((i for i in recientes if i["id"] == int(iid)), None)
+    if pedido:
+        await asyncio.to_thread(perfil.guardar, usuario["id"], pedido["tema"], pedido["texto"], usuario["id"],
+                                origen="grupo", confianza=0.9)
+    await query.answer("💝 Guardado")
+    await query.edit_message_text(f"💝 Guardado en tu perfil: <i>{escape(pedido['texto'] if pedido else '')}</i>",
+                                  parse_mode="HTML")
 
 
 # ----- lo que hacen los usuarios: guardar la charla, silencio, botones, /iniciativa -----
@@ -385,7 +450,8 @@ async def cb_sorpresa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         deseo = next((i["texto"] for i in recientes if i["id"] == int(iid)), None)
         if deseo:
             # Anotado por quien recibe el aviso SOBRE la otra persona -> es una sorpresa: la festejada no lo ve.
-            await asyncio.to_thread(perfil.guardar, int(quien_id), "regalos", deseo, usuario["id"])
+            await asyncio.to_thread(perfil.guardar, int(quien_id), "regalos", deseo, usuario["id"],
+                                    origen="grupo", confianza=0.8)
         await query.answer("💝 Guardado en secreto")
         await query.edit_message_text(
             query.message.text_html + "\n\n💝 <i>Guardado como idea de regalo (secreta).</i>", parse_mode="HTML")

@@ -32,6 +32,7 @@ AYUDA = (
     "🎯 <i>queremos juntar 2 millones para México en julio</i> · <i>aparté 50 lucas para México</i>\n"
     "🛒 <i>agrega leche y huevos a la lista</i>\n"
     "⏰ <i>recuérdame pagar la luz el 5 a las 10</i> · <i>el 3 de marzo es el cumple de la Cami</i>\n"
+    "📅 <i>el sábado vamos al asado de Juan a las 14</i> · <i>¿qué planes tenemos?</i>\n"
     "📍 <i>anota el restaurante Liguria para ir</i> · <i>¿qué hacemos hoy?</i>\n"
     "📌 <i>la clave del wifi es pimpollo123</i> · <i>¿cuál era la clave del wifi?</i>\n"
     "❓ <i>¿cuánto gastamos en uber este año?</i> · <i>¿en qué gastamos más este mes?</i>\n"
@@ -40,7 +41,7 @@ AYUDA = (
     "📷 Mándame la foto de una boleta y la anoto\n\n"
     "📋 <b>Comandos</b>\n"
     "/panel · /dashboard · /ultimos · /saldo · /resumen · /semana · /metas · /lista · /tareas · /menu\n"
-    "/recordatorios · /panoramas · /notas · /perfil · /ideas · /pregunta · /feriados · /invitar\n"
+    "/recordatorios · /planes · /panoramas · /notas · /perfil · /ideas · /pregunta · /feriados · /invitar\n"
     "🙋 /iniciativa: cuánto me meto solo en la charla del grupo (y avisos de sorpresas por privado)\n"
     "📱 /automatico (pagos con el celular) y 🏦 /correo (correos del banco) para anotar solos, con tu confirmación\n"
     "/gasto, /ingreso y /pague para anotar rápido sin IA\n\n"
@@ -142,7 +143,7 @@ async def cb_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer()
     vistas = {"lista": hogar.cmd_lista, "metas": hogar.cmd_metas, "saldo": plata.saldo, "resumen": plata.resumen,
               "recordatorios": hogar.cmd_recordatorios, "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas,
-              "tareas": hogar.cmd_tareas, "menu": _cmd_menu,
+              "tareas": hogar.cmd_tareas, "menu": _cmd_menu, "planes": hogar.cmd_planes,
               "perfil": pareja.cmd_perfil, "ideas": pareja.cmd_ideas}
     await vistas[query.data.split(":")[1]](update, context)
 
@@ -225,7 +226,8 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     elif intencion == "borrar_movimiento":
         await plata.proponer_borrado(update, context, usuario, datos["objetivo"])
     elif intencion == "perfil_guardar":
-        await pareja.guardar_perfil(update, usuario, datos["perfil"])
+        origen = "pregunta" if esperando and esperando.get("tipo") == "pregunta" else "dicho"
+        await pareja.guardar_perfil(update, context, usuario, datos["perfil"], origen)
     elif intencion == "perfil_ver":
         await pareja.ver_perfil(update, usuario, datos["perfil_filtro"])
     elif intencion == "pedir_ideas":
@@ -250,6 +252,7 @@ COMANDOS = [
     BotCommand("metas", "Metas de ahorro"),
     BotCommand("lista", "Lista de compras"),
     BotCommand("recordatorios", "Próximos recordatorios"),
+    BotCommand("planes", "Planes con fecha"),
     BotCommand("panoramas", "Panoramas pendientes"),
     BotCommand("notas", "Datos de la casa"),
     BotCommand("tareas", "Tareas de la casa y turnos"),
@@ -294,7 +297,7 @@ def _crear_app() -> Application:
         "saldo": plata.saldo, "resumen": plata.resumen, "borrar_pruebas": plata.borrar_pruebas,
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
         "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas, "semana": consultas.cmd_semana,
-        "tareas": hogar.cmd_tareas, "menu": _cmd_menu, "iniciativa": conversacion.cmd_iniciativa,
+        "tareas": hogar.cmd_tareas, "menu": _cmd_menu, "planes": hogar.cmd_planes, "iniciativa": conversacion.cmd_iniciativa,
     }
 
     # El estado (propuestas por confirmar, respuestas esperadas...) se guarda en Postgres: sobrevive a los deploys.
@@ -316,6 +319,9 @@ def _crear_app() -> Application:
     app.add_handler(CallbackQueryHandler(pareja.cb_idea, pattern=r"^idea:"))
     app.add_handler(CallbackQueryHandler(plata.cb_movimiento, pattern=r"^mov:"))
     app.add_handler(CallbackQueryHandler(pareja.cb_pedir_ideas, pattern=r"^pideas:"))
+    app.add_handler(CallbackQueryHandler(hogar.cb_plan, pattern=r"^plan:cancelado:\d+$"))
+    app.add_handler(CallbackQueryHandler(pareja.cb_recuerdo_pendiente, pattern=r"^recp:(si|no):[0-9a-f]+$"))
+    app.add_handler(CallbackQueryHandler(conversacion.cb_dato_grupo, pattern=r"^rec:(si|no):\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(conversacion.cb_iniciativa, pattern=r"^ini:(si|no):\d+$"))
     app.add_handler(CallbackQueryHandler(conversacion.cb_sorpresa, pattern=r"^sorp:(g|menos):\d+:\d+$"))
     return app

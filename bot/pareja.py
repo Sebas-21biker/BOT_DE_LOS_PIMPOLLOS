@@ -46,22 +46,71 @@ def _quien(sobre: str, usuario: dict, pareja: dict | None) -> int | None:
     return pareja["id"] if sobre == "pareja" else None
 
 
-async def guardar_perfil(update: Update, usuario: dict, datos: list[dict]) -> None:
+def _linea_dato(d: dict, uid: int | None, usuario: dict, pareja: dict | None) -> str:
+    sobre = ("De los dos" if uid is None else "Sobre ti" if uid == usuario["id"]
+             else f"Sobre {escape(primer_nombre(pareja))}")
+    extra = (" 🔒" if d.get("privado") or perfil.visibilidad_por_defecto(uid, d["categoria"], usuario["id"]) == "autor"
+             else "") + (f" <i>(hasta el {d['vigente_hasta']:%d-%m})</i>" if d.get("vigente_hasta") else "")
+    return f"{perfil.CATEGORIAS[d['categoria']].split()[0]} {sobre}: {escape(d['dato'])}{extra}"
+
+
+async def guardar_perfil(update: Update, context: ContextTypes.DEFAULT_TYPE, usuario: dict, datos: list[dict],
+                         origen: str = "dicho") -> None:
+    """Lo que contaron como dato se guarda al tiro (con Deshacer); lo deducido se pregunta antes de guardar."""
     pareja = finanzas.otro_usuario(usuario["id"])
-    ids, lineas = [], []
+    explicitos = [d for d in datos if d.get("explicito", True)]
+    deducidos = [d for d in datos if not d.get("explicito", True)]
     sorpresa_en_grupo = comun.es_grupo(update) and any(
-        d["categoria"] == "regalos" and d["sobre"] == "pareja" for d in datos)
-    for d in datos:
-        uid = _quien(d["sobre"], usuario, pareja)
-        ids.append(perfil.guardar(uid, d["categoria"], d["dato"], usuario["id"]))
-        sobre = ("De los dos" if uid is None else "Sobre ti" if uid == usuario["id"]
-                 else f"Sobre {escape(primer_nombre(pareja))}")
-        lineas.append(f"{perfil.CATEGORIAS[d['categoria']].split()[0]} {sobre}: {escape(d['dato'])}")
-    nota = ("\n\n🤫 <i>Ojo: las ideas de regalo mejor cuéntamelas por privado, que acá tu pareja las ve. "
-            "Igual no se las voy a mostrar.</i>") if sorpresa_en_grupo else ""
-    await update.effective_message.reply_text(
-        "💝 Anotado, no se me olvida:\n" + "\n".join(lineas) + nota, parse_mode="HTML",
-        reply_markup=teclado([boton("↩️ Deshacer", "borrar:perfil:" + ",".join(map(str, ids)))]))
+        d["categoria"] == "regalos" and d["sobre"] == "pareja" or d.get("privado") for d in datos)
+    if explicitos:
+        ids, lineas = [], []
+        for d in explicitos:
+            uid = _quien(d["sobre"], usuario, pareja)
+            ids.append(perfil.guardar(uid, d["categoria"], d["dato"], usuario["id"], origen=origen,
+                                      privado=d.get("privado", False), vigente_hasta=d.get("vigente_hasta")))
+            lineas.append(_linea_dato(d, uid, usuario, pareja))
+        nota = ("\n\n🤫 <i>Ojo: lo secreto mejor cuéntamelo por privado, que acá tu pareja lo ve. "
+                "Igual no se lo voy a mostrar.</i>") if sorpresa_en_grupo else ""
+        await update.effective_message.reply_text(
+            "💝 Anotado, no se me olvida:\n" + "\n".join(lineas) + nota, parse_mode="HTML",
+            reply_markup=teclado([boton("↩️ Deshacer", "borrar:perfil:" + ",".join(map(str, ids)))]))
+    if deducidos:
+        clave = secrets.token_hex(4)
+        context.bot_data.setdefault("recuerdos_pendientes", {})[clave] = {
+            "usuario_id": usuario["id"], "origen": "inferido",
+            "datos": [{**d, "uid": _quien(d["sobre"], usuario, pareja)} for d in deducidos]}
+        lineas = [_linea_dato(d, _quien(d["sobre"], usuario, pareja), usuario, pareja) for d in deducidos]
+        await update.effective_message.reply_text(
+            "🤔 Me pareció entender esto, ¿lo guardo?\n" + "\n".join(lineas), parse_mode="HTML",
+            reply_markup=teclado([boton("✅ Sí, guárdalo", f"recp:si:{clave}"), boton("❌ No", f"recp:no:{clave}")]))
+
+
+async def cb_recuerdo_pendiente(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Confirmación de un dato deducido (nunca se guarda sin que la persona diga que sí)."""
+    query = update.callback_query
+    usuario = await comun.usuario_de_boton(query)
+    if usuario is None:
+        return
+    _, respuesta, clave = query.data.split(":")
+    pendiente = context.bot_data.get("recuerdos_pendientes", {}).get(clave)
+    if pendiente is None:
+        await query.answer("Esto ya caducó 🙈")
+        return
+    if pendiente["usuario_id"] != usuario["id"]:
+        await query.answer("Esto lo tiene que confirmar quien lo dijo 🙏", show_alert=True)
+        return
+    context.bot_data["recuerdos_pendientes"].pop(clave)
+    if respuesta == "no":
+        await query.answer("Ok, no lo guardo")
+        await query.edit_message_text("👌 Listo, no lo guardé.")
+        return
+    ids = [perfil.guardar(d["uid"], d["categoria"], d["dato"], usuario["id"], origen=pendiente["origen"],
+                          confianza=0.9, privado=d.get("privado", False), vigente_hasta=d.get("vigente_hasta"))
+           for d in pendiente["datos"]]
+    await query.answer("💝 Guardado")
+    await query.edit_message_text(
+        query.message.text_html.replace("🤔 Me pareció entender esto, ¿lo guardo?", "💝 Guardado:"),
+        parse_mode="HTML", reply_markup=teclado([boton("↩️ Deshacer", "borrar:perfil:" + ",".join(map(str, ids)))]))
 
 
 def _texto_perfil(filas: list[dict], usuario: dict) -> str:
@@ -77,7 +126,9 @@ def _texto_perfil(filas: list[dict], usuario: dict) -> str:
         if f["categoria"] != categoria:
             categoria = f["categoria"]
             lineas.append(f"  {perfil.CATEGORIAS[categoria]}")
-        lineas.append(f"    • {escape(f['dato'])}")
+        candado = " 🔒" if perfil.es_privado(f) else ""
+        vigencia = f" <i>(hasta el {f['vigente_hasta']:%d-%m})</i>" if f.get("vigente_hasta") else ""
+        lineas.append(f"    • {escape(f['dato'])}{candado}{vigencia}")
     if lineas:
         bloques.append("\n".join(lineas))
     return "\n\n".join(bloques)
@@ -87,7 +138,12 @@ async def ver_perfil(update: Update, usuario: dict, filtro: dict | None = None) 
     pareja = finanzas.otro_usuario(usuario["id"])
     filtro = filtro or {"sobre": "todos", "categoria": "todas"}
     categoria = None if filtro["categoria"] == "todas" else filtro["categoria"]
-    if filtro["sobre"] == "todos":
+    if filtro.get("busqueda"):
+        filas = perfil.buscar(filtro["busqueda"])
+        if filtro["sobre"] in ("yo", "pareja"):
+            uid = _quien(filtro["sobre"], usuario, pareja)
+            filas = [f for f in filas if f["usuario_id"] in (uid, None)]
+    elif filtro["sobre"] == "todos":
         filas = perfil.listar(categoria=categoria)
     elif filtro["sobre"] == "ambos":
         filas = perfil.listar(solo_de_los_dos=True, categoria=categoria)
@@ -123,7 +179,7 @@ def _estacion(mes: int) -> str:
             6: "invierno", 7: "invierno", 8: "invierno"}.get(mes, "primavera")
 
 
-def _contexto_ideas(usuario: dict, recientes: list[str], en_grupo: bool = False) -> str:
+def _contexto_ideas(usuario: dict, recientes: list[str], en_grupo: bool = False, pedido: str = "") -> str:
     pareja = finanzas.otro_usuario(usuario["id"])
     hoy = finanzas.hoy()
     lineas = [f"Hoy: {comun.DIAS[hoy.weekday()]} {hoy:%Y-%m-%d} ({_estacion(hoy.month)} en Chile).",
@@ -135,6 +191,7 @@ def _contexto_ideas(usuario: dict, recientes: list[str], en_grupo: bool = False)
     lineas += ["", "Perfil (contexto opcional; usa solo lo relacionado con lo que piden):"]
     # Las ideas de regalo secretas sobre quien pide (o todas, si es en el grupo) no entran: arruinarían la sorpresa.
     filas = perfil.visibles_para(perfil.listar(), usuario["id"], en_grupo)
+    filas = perfil.relevantes(filas, perfil.buscar(pedido, limite=40) if pedido and len(filas) > 40 else [])
     lineas += [f"- {f['nombre'] or 'De los dos'} / {f['categoria']}: {f['dato']}" for f in filas] or ["- (vacío)"]
     pendientes = hogar.panoramas_pendientes()
     if pendientes:
@@ -149,7 +206,7 @@ async def armar_ideas(usuario: dict, pedido: str, bot_data: dict, titulo: str = 
                       en_grupo: bool = False):
     """Genera ideas y devuelve (texto HTML, botones para guardarlas). Lanza ErrorInterprete si falla."""
     recientes: list = bot_data.setdefault("ideas_recientes", [])
-    resultado = await interprete.generar_ideas(pedido, _contexto_ideas(usuario, recientes, en_grupo))
+    resultado = await interprete.generar_ideas(pedido, _contexto_ideas(usuario, recientes, en_grupo, pedido))
     ideas = resultado["ideas"][:5]
     recientes.extend(i["titulo"] for i in ideas)
     del recientes[:-20]  # memoria de las últimas 20 ideas

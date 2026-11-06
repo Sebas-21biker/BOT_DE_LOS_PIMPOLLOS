@@ -79,6 +79,7 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
   por privado, pero solo avisos de sorpresas a partir de deseos dichos en el grupo; nunca temas sensibles.
 - Fase B: memoria `recuerdos` (migra `perfil`): usuario, categoría, confianza, origen, visibilidad, vigencia;
   lo inferido se pregunta antes de guardar. Búsqueda con full-text de Postgres (sin embeddings por ahora). Tabla `planes`.
+  **Hecha** (ver "Memoria y planes" abajo).
 - Fase C: disparadores proactivos con motivo verificable por SQL, cooldown y horario de descanso.
 - Fase D (postergada): Google Maps/Places y Spotify más adelante; Calendar/Sheets/Drive no por ahora.
 
@@ -160,6 +161,21 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
   Deseos ("me encantaría ir a…") se avisan por privado SOLO a la otra persona (`decidir_sorpresa`: sin repetir en 30
   días, cada 3 días en nivel baja), con botones guardar como idea de regalo secreta / ideas / menos avisos. Lo escrito
   en privado nunca se usa para escribirle al otro.
+- Memoria y planes (fase B, migración 013): la tabla `perfil` se renombró a `recuerdos` (el módulo sigue siendo
+  `core/perfil.py`) con confianza, origen (dicho/pregunta/grupo/inferido), visibilidad (todos/autor), vigente_hasta y
+  columna `busqueda` (tsvector español, índice GIN). Queda una VISTA `perfil` solo por compatibilidad durante el
+  deploy: se puede borrar en una migración futura. Visibilidad "autor" = solo lo ve quien lo anotó (sorpresas de
+  regalo, "no le digas"); `visibles_para` la aplica y en el grupo oculta todo lo privado. Lo vencido no se lista.
+  En perfil_guardar la IA marca `explicito`: lo explícito se guarda con Deshacer, lo deducido se propone con
+  Sí/No (`recp:`, `bot_data["recuerdos_pendientes"]`). La respuesta a la pregunta pimpolla se guarda con origen
+  "pregunta". En el grupo, Haiku también extrae `datos` que alguien dice de sí mismo: se le pregunta por privado a
+  ESA persona (`decidir_dato`: máx. 1 al día, sin repetir, no si ya existe), botones `rec:`. perfil_ver acepta
+  busqueda (full-text); las ideas usan `perfil.relevantes` cuando hay más de 40 recuerdos.
+  `planes` (intenciones plan_nuevo / ver_planes, /planes, cancelar con `plan:cancelado:`): planes con fecha, distintos
+  de panoramas (ideas sin fecha) y recordatorios. Se avisan a la pareja por privado y van al contexto de las
+  intervenciones. La fase C usará planes y recuerdos para disparadores.
+- Probar SQL sin tocar producción: hay PostgreSQL 18 local en C:\Program Files\PostgreSQL\18 (initdb + pg_ctl en un
+  directorio temporal, puerto aparte); los tests de pytest no usan base.
 - Tests: `pytest` (requirements-dev.txt). No tocan la base ni la API: el .env local apunta a producción, así que
   tampoco correr el bot en local con ese .env (le robaría los mensajes al de Railway).
 

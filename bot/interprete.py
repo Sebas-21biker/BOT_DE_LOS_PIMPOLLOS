@@ -36,7 +36,7 @@ INTENCIONES = [
     "panorama_agregar", "panorama_sugerir", "nota_guardar", "nota_buscar",
     "tarea_nueva", "ver_tareas", "tarea_hecha", "menu_semanal",
     "perfil_guardar", "perfil_ver", "pedir_ideas", "editar_movimiento", "borrar_movimiento",
-    "consulta", "otro",
+    "plan_nuevo", "ver_planes", "consulta", "otro",
 ]
 
 SISTEMA = """Eres el intérprete de "Pimpollo", el bot de una pareja en Chile. Recibes mensajes informales en \
@@ -113,11 +113,17 @@ datos de esa intención.
     común, sueños compartidos). categoria: gustos/comida/suenos/trabajo/amigos/deportes/regalos/musica/otro.
     dato: frase corta y clara en tercera persona sin el nombre ("le encanta el sushi", "trabaja de 9 a 18");
     si es de los dos, en plural ("sueñan con ir a Japón", "sus amigos son Juan y la Fran").
+    explicito: true si lo cuenta como un dato ("a la Cami le encanta el sushi", "anota que..."); false si
+    solo lo deduces de algo que dijo de pasada ("uf, otra vez cilantro" -> no le gusta el cilantro). No
+    deduzcas nada que no se desprenda claramente del mensaje.
+    privado: true si pide que la pareja no lo sepa ("no le digas", "es secreto", "es sorpresa").
+    vigente_hasta: YYYY-MM-DD si el dato es temporal ("este mes estoy a dieta" -> fin de mes); si no, "".
     Ojo: datos prácticos de la casa (wifi, contactos, códigos) son nota_guardar, no perfil.
 20. perfil_ver: preguntan qué saben de alguien ("¿qué le gusta a la Cami?", "¿cuál es mi horario?",
     "¿qué sueños tenemos?"). Llena perfil_filtro: sobre (yo/pareja/ambos/todos) y categoria (o "todas").
     "¿Qué le gusta a X?" o "¿qué sabes de X?" van con categoria "todas" (los gustos están repartidos en
     comida, deportes, música...); usa una categoría solo si preguntan por algo específico (horario, sueños).
+    busqueda: palabras clave si preguntan por algo puntual ("¿le gusta el cilantro?" -> "cilantro"); si no, "".
 21. pedir_ideas: piden que les RECOMIENDES algo nuevo: una cita, un regalo, un panorama para el finde, una
     sorpresa ("recomiéndanos algo para el sábado", "ideas de regalo para la Cami", "¿qué podríamos hacer
     distinto?"). busqueda = qué tipo de idea piden, con los detalles (presupuesto, para quién, cuándo).
@@ -132,7 +138,12 @@ datos de esa intención.
     Si el Contexto ya dice cuál movimiento es, deja objetivo vacío.
 23. borrar_movimiento: eliminar un gasto/ingreso ya guardado ("borra el gasto del sushi", "elimina el
     último"). objetivo igual que arriba.
-24. otro: cualquier otra cosa (saludos, conversación).
+24. plan_nuevo: un plan CONCRETO con fecha que van a hacer ("el sábado vamos al asado de Juan", "el 20
+    tenemos matrimonio de la Fran a las 17:00", "mañana almorzamos con mis papás"). Un ítem por plan:
+    titulo corto, fecha YYYY-MM-DD (en el futuro), hora "HH:MM" o "", lugar o "", con_quien o "".
+    (Una idea sin fecha para algún día es panorama_agregar; algo que hay que avisar es recordatorio.)
+25. ver_planes: quieren ver qué planes tienen ("¿qué tenemos este finde?", "¿qué planes hay?").
+26. otro: cualquier otra cosa (saludos, conversación).
 
 Imágenes: si viene una foto de una boleta, voucher o comprobante, la intención es movimientos con UN solo
 gasto por el TOTAL pagado (no cada ítem): descripcion = comercio (y qué se compró, breve), fecha = la de la
@@ -204,11 +215,18 @@ def _campos(categorias: list[str]) -> dict:
             "sobre": {"type": "string", "enum": ["yo", "pareja", "ambos"]},
             "categoria": {"type": "string", "enum": CATEGORIAS_PERFIL},
             "dato": _TEXTO,
+            "explicito": {"type": "boolean"},
+            "privado": {"type": "boolean"},
+            "vigente_hasta": _TEXTO,
         })},
         "perfil_filtro": _obj({
             "sobre": {"type": "string", "enum": ["yo", "pareja", "ambos", "todos"]},
             "categoria": {"type": "string", "enum": CATEGORIAS_PERFIL + ["todas"]},
+            "busqueda": _TEXTO,
         }),
+        "planes": {"type": "array", "items": _obj({
+            "titulo": _TEXTO, "fecha": _FECHA, "hora": _TEXTO, "lugar": _TEXTO, "con_quien": _TEXTO,
+        })},
         "tareas": {"type": "array", "items": _obj({
             "nombre": _TEXTO, "cada_dias": {"type": "integer"},
             "quien": {"type": "string", "enum": ["turnos", "yo", "pareja"]},
@@ -239,14 +257,14 @@ _CAMPOS_POR_INTENCION = {
     "nota_buscar": ["busqueda"], "tarea_nueva": ["tareas"], "tarea_hecha": ["busqueda"],
     "menu_semanal": ["busqueda"], "perfil_guardar": ["perfil"], "perfil_ver": ["perfil_filtro"],
     "pedir_ideas": ["busqueda"], "consulta": ["consulta"], "otro": ["respuesta"],
-    "editar_movimiento": ["objetivo", "cambios"], "borrar_movimiento": ["objetivo"],
+    "editar_movimiento": ["objetivo", "cambios"], "borrar_movimiento": ["objetivo"], "plan_nuevo": ["planes"],
 }
 
 # Valores por defecto de los campos que una intención no extrae (así el resto del bot no tiene que preguntar).
 _VACIO = {
     "movimientos": [], "pagos": [], "metas_nuevas": [], "aportes": [], "compras": [], "recordatorios": [],
     "panoramas": [], "notas": [], "perfil": [], "tareas": [], "filtro_tipo": "cualquiera", "busqueda": "",
-    "respuesta": "", "perfil_filtro": {"sobre": "todos", "categoria": "todas"},
+    "respuesta": "", "perfil_filtro": {"sobre": "todos", "categoria": "todas", "busqueda": ""}, "planes": [],
     "consulta": {"metrica": "gastos", "desde": "", "hasta": "", "categoria": "todas", "persona": "ambos",
                  "agrupar": "nada", "busqueda": ""},
     "objetivo": {"busqueda": "", "fecha": ""},
@@ -386,6 +404,8 @@ def _validar(datos: dict, ahora: datetime, categorias_gasto: list[str], categori
                         if a["meta"] in metas_activas]
     datos["recordatorios"] = [_validar_recordatorio(r, ahora) for r in datos["recordatorios"]]
     datos["tareas"] = [t for t in datos["tareas"] if t["cada_dias"] > 0]
+    datos["perfil"] = [_validar_dato_perfil(d) for d in datos["perfil"] if d["dato"].strip()]
+    datos["planes"] = [_validar_plan(p, hoy) for p in datos["planes"] if p["titulo"].strip()]
     c = datos["consulta"]
     c["desde"] = _fecha(c["desde"], hoy.replace(day=1))
     c["hasta"] = _fecha(c["hasta"], hoy)
@@ -402,7 +422,7 @@ def _validar(datos: dict, ahora: datetime, categorias_gasto: list[str], categori
     requeridos = {"movimientos": "movimientos", "pago_pareja": "pagos", "meta_nueva": "metas_nuevas",
                   "meta_aporte": "aportes", "compras_agregar": "compras", "recordatorio": "recordatorios",
                   "panorama_agregar": "panoramas", "nota_guardar": "notas", "tarea_nueva": "tareas",
-                  "perfil_guardar": "perfil"}
+                  "perfil_guardar": "perfil", "plan_nuevo": "planes"}
     lista = requeridos.get(datos["intencion"])
     if lista and not datos[lista]:
         datos["intencion"] = "otro"
@@ -453,6 +473,21 @@ def _validar_movimiento(m: dict, cat_gasto: list[str], cat_ingreso: list[str], h
         "fecha": _fecha(m["fecha"], hoy),
         "porcentaje_pagador": porcentaje,
     }
+
+
+def _validar_dato_perfil(d: dict) -> dict:
+    vigente = _fecha(d.get("vigente_hasta") or "", None)
+    return {"sobre": d["sobre"], "categoria": d["categoria"], "dato": d["dato"].strip(),
+            "explicito": d.get("explicito", True), "privado": d.get("privado", False), "vigente_hasta": vigente}
+
+
+def _validar_plan(p: dict, hoy: date) -> dict:
+    try:
+        hora = time.fromisoformat(p["hora"]) if p["hora"] else None
+    except ValueError:
+        hora = None
+    return {"titulo": p["titulo"].strip(), "fecha": _fecha(p["fecha"], hoy), "hora": hora,
+            "lugar": p["lugar"].strip(), "con_quien": p["con_quien"].strip()}
 
 
 def _validar_pago(p: dict, hoy: date) -> dict:
@@ -578,7 +613,12 @@ Tu trabajo NO es responder: es evaluar si a Pimpollo le serviría intervenir sin
 - deseos: cosas que UNA persona dice que le gustaría tener, hacer o visitar ("me encantaría ir a...", "quiero
   esas zapatillas", "muero por probar..."), que la otra podría usar para una sorpresa o regalo. quien = el
   nombre EXACTO de quien lo dijo. deseo = frase corta en tercera persona ("le encantaría ir a Valparaíso").
-  Solo deseos explícitos y concretos; nada inventado ni deducido de bromas. Si no hay, lista vacía."""
+  Solo deseos explícitos y concretos; nada inventado ni deducido de bromas. Si no hay, lista vacía.
+- datos: cosas que una persona dice SOBRE SÍ MISMA que vale la pena recordar a largo plazo para conocerla
+  (gustos, comidas que ama u odia, alergias, horarios, deportes, música, amigos, sueños): "odio el cilantro",
+  "los jueves juego fútbol". quien = nombre EXACTO de quien lo dijo; dato = frase corta en tercera persona sin
+  el nombre ("no le gusta el cilantro"). Nada pasajero ("hoy estoy cansado"), nada íntimo ni delicado, nada
+  deducido de bromas. Máximo 2. Si no hay, lista vacía."""
 
 
 async def clasificar_conversacion(tramo: str, nombres: list[str], ahora: datetime) -> dict:
@@ -596,6 +636,11 @@ async def clasificar_conversacion(tramo: str, nombres: list[str], ahora: datetim
             "deseo": _TEXTO,
             "tipo": {"type": "string", "enum": ["regalo", "cita", "experiencia", "viaje", "otro"]},
         })},
+        "datos": {"type": "array", "items": _obj({
+            "quien": {"type": "string", "enum": nombres},
+            "categoria": {"type": "string", "enum": [c for c in CATEGORIAS_PERFIL if c != "regalos"]},
+            "dato": _TEXTO,
+        })},
     })
     contenido = (f"Ahora: {DIAS[ahora.weekday()]} {ahora:%Y-%m-%d %H:%M}.\nLa pareja: {', '.join(nombres)}.\n\n"
                  f"Conversación (los marcados [al bot] le hablaban a Pimpollo y él ya respondió):\n{tramo}")
@@ -603,6 +648,7 @@ async def clasificar_conversacion(tramo: str, nombres: list[str], ahora: datetim
                           motivo="clasificador", modelo=config.claude_model_clasificador())
     datos["utilidad"] = max(0, min(10, int(datos["utilidad"])))
     datos["deseos"] = [d for d in datos["deseos"] if d["quien"] in nombres and d["deseo"].strip()]
+    datos["datos"] = [d for d in datos.get("datos", []) if d["quien"] in nombres and d["dato"].strip()][:2]
     return datos
 
 
