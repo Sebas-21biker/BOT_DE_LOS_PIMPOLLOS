@@ -75,7 +75,8 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 - Fase A: conversación en el grupo con iniciativa. Buffer temporal de mensajes (48 h), se evalúa el tramo cuando la
   charla se pausa; clasificador con **Claude Haiku 5.5** (variable CLAUDE_MODEL_CLASIFICADOR), redacción con el
   modelo principal. **Horario de descanso 22:30–8:30**. **Nivel de iniciativa inicial: bajo** (cooldown, máx. por
-  día, botones 👍/🤫). Nunca fingir emociones ni recuerdos.
+  día, botones 👍/🤫). Nunca fingir emociones ni recuerdos. **Hecha** (ver "Iniciativa" abajo). Decidido: también
+  por privado, pero solo avisos de sorpresas a partir de deseos dichos en el grupo; nunca temas sensibles.
 - Fase B: memoria `recuerdos` (migra `perfil`): usuario, categoría, confianza, origen, visibilidad, vigencia;
   lo inferido se pregunta antes de guardar. Búsqueda con full-text de Postgres (sin embeddings por ahora). Tabla `planes`.
 - Fase C: disparadores proactivos con motivo verificable por SQL, cooldown y horario de descanso.
@@ -145,6 +146,20 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
   últimas 100. Si se cambia user_data fuera de un handler, llamar `app.mark_data_for_update_persistence`.
 - Ideas de regalo sorpresa: un dato "regalos" que una persona anotó sobre la otra no lo ve la festejada (ni en
   /perfil ni en el contexto de las ideas), y en el grupo no se muestra (`perfil.visibles_para`).
+- Iniciativa (fase A, `bot/conversacion.py` + `core/iniciativa.py`, migración 012): todo texto del grupo se guarda en
+  `mensajes_grupo` (se borra a las 48 h; `al_bot` = ya lo procesó el bot). `bucle_iniciativa` (cada 30 s, nunca en
+  22:30–8:30) toma los grupos con 2 min sin mensajes y evalúa el tramo nuevo UNA vez (`iniciativa.evaluado_hasta`).
+  Antes de la IA: tramos cortos o con palabras sensibles (`_RAICES_SENSIBLES`) se descartan; tope 80 clasificaciones
+  al día. Haiku (`interprete.clasificar_conversacion`, motivo "clasificador") devuelve tema, sensible, ya_resuelto,
+  oportunidad, utilidad 0-10 y deseos. El código decide (`decidir_grupo`): nivel, silencio, descanso, momento pasado
+  (20 min), bot recién habló (10 min), cooldown y máximo diario por nivel (`NIVELES`; baja = umbral 8, 3 h, 2/día),
+  puntaje = utilidad − intervenciones de hoy ≥ umbral + ajuste. Redacta Opus (`redactar_intervencion`, motivo
+  "iniciativa", contexto sin sorpresas) y puede desistir. Botones 👍/🤫 mueven `iniciativa.ajuste` (−2..3).
+  "pimpollo, silencio" calla el grupo hasta las 8:30; "ya puedes hablar" lo revierte. /iniciativa baja|media|alta|off:
+  en el grupo, la charla; en privado, los avisos de sorpresas de esa persona.
+  Deseos ("me encantaría ir a…") se avisan por privado SOLO a la otra persona (`decidir_sorpresa`: sin repetir en 30
+  días, cada 3 días en nivel baja), con botones guardar como idea de regalo secreta / ideas / menos avisos. Lo escrito
+  en privado nunca se usa para escribirle al otro.
 - Tests: `pytest` (requirements-dev.txt). No tocan la base ni la API: el .env local apunta a producción, así que
   tampoco correr el bot en local con ese .env (le robaría los mensajes al de Railway).
 

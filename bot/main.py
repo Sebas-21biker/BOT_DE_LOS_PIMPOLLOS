@@ -41,6 +41,7 @@ AYUDA = (
     "📋 <b>Comandos</b>\n"
     "/panel · /dashboard · /ultimos · /saldo · /resumen · /semana · /metas · /lista · /tareas · /menu\n"
     "/recordatorios · /panoramas · /notas · /perfil · /ideas · /pregunta · /feriados · /invitar\n"
+    "🙋 /iniciativa: cuánto me meto solo en la charla del grupo (y avisos de sorpresas por privado)\n"
     "📱 /automatico (pagos con el celular) y 🏦 /correo (correos del banco) para anotar solos, con tu confirmación\n"
     "/gasto, /ingreso y /pague para anotar rápido sin IA\n\n"
     "🧪 Si escribes <b>test</b> en un gasto o pago, lo anoto como prueba (no cuenta). "
@@ -168,10 +169,17 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if grupo and esperando and esperando.get("tipo") == "pregunta":
         esperando = None  # la pregunta pimpolla se hizo por privado: se responde allá, no con la charla del grupo
 
-    # En el grupo el bot recibe toda la conversación: la charla normal no pasa por la IA (no gasta tokens).
-    if (grupo and esperando is None and "corrigiendo" not in context.user_data
-            and not _le_hablan(update, context) and not conversacion.merece_ia(texto, tareas)):
-        return
+    if grupo:
+        le_hablan = _le_hablan(update, context)
+        pasa_a_ia = (esperando is not None or "corrigiendo" in context.user_data or le_hablan
+                     or conversacion.merece_ia(texto, tareas))
+        # Memoria corta (48 h) para que Pimpollo evalúe la charla cuando se pausa (fase A: iniciativa).
+        await conversacion.guardar_mensaje(update, usuario, al_bot=pasa_a_ia)
+        if le_hablan and await conversacion.manejar_silencio(update):
+            return
+        # En el grupo el bot recibe toda la conversación: la charla normal no pasa por la IA (no gasta tokens).
+        if not pasa_a_ia:
+            return
 
     # ¿Responde a una pregunta del bot (monto de un aporte, total de la compra...)?
     contexto = intencion_forzada = movimiento_id = None
@@ -252,6 +260,7 @@ COMANDOS = [
     BotCommand("feriados", "Feriados y fechas especiales"),
     BotCommand("automatico", "Anotar pagos del celular automáticamente"),
     BotCommand("correo", "Anotar gastos desde los correos del banco"),
+    BotCommand("iniciativa", "Cuánto me meto solo en la conversación"),
     BotCommand("costo", "Cuánto va costando la IA este mes"),
     BotCommand("invitar", "Link para que tu pareja se una"),
     BotCommand("pague", "Anotar que le pagaste a tu pareja"),
@@ -285,7 +294,7 @@ def _crear_app() -> Application:
         "saldo": plata.saldo, "resumen": plata.resumen, "borrar_pruebas": plata.borrar_pruebas,
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
         "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas, "semana": consultas.cmd_semana,
-        "tareas": hogar.cmd_tareas, "menu": _cmd_menu,
+        "tareas": hogar.cmd_tareas, "menu": _cmd_menu, "iniciativa": conversacion.cmd_iniciativa,
     }
 
     # El estado (propuestas por confirmar, respuestas esperadas...) se guarda en Postgres: sobrevive a los deploys.
@@ -307,6 +316,8 @@ def _crear_app() -> Application:
     app.add_handler(CallbackQueryHandler(pareja.cb_idea, pattern=r"^idea:"))
     app.add_handler(CallbackQueryHandler(plata.cb_movimiento, pattern=r"^mov:"))
     app.add_handler(CallbackQueryHandler(pareja.cb_pedir_ideas, pattern=r"^pideas:"))
+    app.add_handler(CallbackQueryHandler(conversacion.cb_iniciativa, pattern=r"^ini:(si|no):\d+$"))
+    app.add_handler(CallbackQueryHandler(conversacion.cb_sorpresa, pattern=r"^sorp:(g|menos):\d+:\d+$"))
     return app
 
 
@@ -321,7 +332,8 @@ async def _correr() -> None:
             config.puerto_web(),
             al_recibir_pago=lambda usuario, texto, origen: automatico.procesar_pago(app, usuario, texto, origen))
         tareas = [asyncio.create_task(hogar.bucle_recordatorios(app.bot)),
-                  asyncio.create_task(consultas.bucle_programados(app))]
+                  asyncio.create_task(consultas.bucle_programados(app)),
+                  asyncio.create_task(conversacion.bucle_iniciativa(app))]
         log.info("Bot iniciado en modo polling (modelo: %s, dashboard: %s)",
                  config.claude_model(), config.dashboard_url() or "sin URL pública")
         detener = asyncio.Event()

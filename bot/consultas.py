@@ -128,7 +128,8 @@ async def foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------- costo de la IA ----------
 
 MOTIVOS = {"mensaje": "💬 Mensajes", "grupo": "👥 Mensajes del grupo", "correo": "🏦 Correos del banco", "atajo": "📱 Pagos con el celular",
-           "foto": "📷 Fotos de boletas", "menu": "🍽️ Menús", "ideas": "💡 Ideas"}
+           "foto": "📷 Fotos de boletas", "menu": "🍽️ Menús", "ideas": "💡 Ideas",
+           "clasificador": "👂 Leer la charla del grupo (Haiku)", "iniciativa": "🙋 Intervenciones por iniciativa"}
 
 
 async def cmd_costo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

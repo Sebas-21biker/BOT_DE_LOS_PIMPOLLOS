@@ -35,6 +35,11 @@ def claude_model() -> str:
     return os.getenv("CLAUDE_MODEL", "").strip() or "claude-opus-5-5"
 
 
+def claude_model_clasificador() -> str:
+    """Modelo barato que evalúa la charla del grupo (fase A)."""
+    return os.getenv("CLAUDE_MODEL_CLASIFICADOR", "").strip() or "claude-haiku-5-5"
+
+
 def puerto_web() -> int:
     return int(os.getenv("PORT", "8080"))
 

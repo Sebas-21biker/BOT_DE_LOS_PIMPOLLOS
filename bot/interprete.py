@@ -263,8 +263,9 @@ async def _registrar_uso(modelo: str, motivo: str, respuesta) -> None:
     await asyncio.to_thread(costos.registrar, modelo, motivo, respuesta.usage)
 
 
-async def _llamar(sistema: str, mensajes: list[dict], schema: dict, motivo: str = "mensaje") -> dict:
-    modelo = config.claude_model()
+async def _llamar(sistema: str, mensajes: list[dict], schema: dict, motivo: str = "mensaje",
+                  modelo: str | None = None) -> dict:
+    modelo = modelo or config.claude_model()
     extra = {}
     if not modelo.startswith("claude-haiku"):
         # Si el modelo rechaza por política, la API reintenta con un modelo de respaldo.
@@ -553,3 +554,79 @@ async def generar_ideas(pedido: str, contexto: str) -> dict:
     if respuesta.stop_reason != "end_turn":
         raise ErrorInterprete("No me salieron las ideas, pídemelas de nuevo 🙏")
     return json.loads(next(b.text for b in respuesta.content if b.type == "text"))
+
+
+# ---------- iniciativa en el grupo (fase A) ----------
+
+OPORTUNIDADES = ["ninguna", "planificar_salida", "decidir_comida", "pelicula_serie", "viaje", "regalo",
+                 "recordar_algo", "compras", "otra"]
+
+CLASIFICADOR_SISTEMA = """Lees un tramo de la conversación del grupo de Telegram de una pareja en Chile. En el grupo
+está "Pimpollo", su bot asistente (finanzas, lista de compras, recordatorios, panoramas, ideas de citas y regalos).
+Tu trabajo NO es responder: es evaluar si a Pimpollo le serviría intervenir sin que lo llamen, y detectar deseos.
+
+- tema: de qué hablan, en pocas palabras.
+- sensible: true si tocan algo delicado o íntimo: peleas o tensión entre ellos, salud, duelo, familia
+  complicada, sexo, problemas de plata serios, trabajo estresante, tristeza. Ante la duda, true.
+- ya_resuelto: true si lo que discutían ya quedó decidido o cerrado.
+- oportunidad: en qué podría ayudar Pimpollo. "ninguna" si es charla normal, bromas, saludos, logística
+  trivial o si ya están resolviéndolo bien solos.
+- utilidad: 0 a 10, cuánto aportaría que Pimpollo hable AHORA sin que lo llamen. 9-10 solo si hay una
+  indecisión clara que él puede destrabar (no saben qué hacer el finde, qué comer, qué peli ver) o algo que
+  claramente se les va a olvidar. Interrumpir es caro: en la duda, bajo.
+- que_aportaria: una frase con lo que diría o haría (o "").
+- deseos: cosas que UNA persona dice que le gustaría tener, hacer o visitar ("me encantaría ir a...", "quiero
+  esas zapatillas", "muero por probar..."), que la otra podría usar para una sorpresa o regalo. quien = el
+  nombre EXACTO de quien lo dijo. deseo = frase corta en tercera persona ("le encantaría ir a Valparaíso").
+  Solo deseos explícitos y concretos; nada inventado ni deducido de bromas. Si no hay, lista vacía."""
+
+
+async def clasificar_conversacion(tramo: str, nombres: list[str], ahora: datetime) -> dict:
+    """Clasifica un tramo de la charla del grupo con el modelo barato (Haiku)."""
+    nombres = sorted(set(nombres))
+    schema = _obj({
+        "tema": _TEXTO,
+        "sensible": {"type": "boolean"},
+        "ya_resuelto": {"type": "boolean"},
+        "oportunidad": {"type": "string", "enum": OPORTUNIDADES},
+        "utilidad": {"type": "integer"},
+        "que_aportaria": _TEXTO,
+        "deseos": {"type": "array", "items": _obj({
+            "quien": {"type": "string", "enum": nombres},
+            "deseo": _TEXTO,
+            "tipo": {"type": "string", "enum": ["regalo", "cita", "experiencia", "viaje", "otro"]},
+        })},
+    })
+    contenido = (f"Ahora: {DIAS[ahora.weekday()]} {ahora:%Y-%m-%d %H:%M}.\nLa pareja: {', '.join(nombres)}.\n\n"
+                 f"Conversación (los marcados [al bot] le hablaban a Pimpollo y él ya respondió):\n{tramo}")
+    datos = await _llamar(CLASIFICADOR_SISTEMA, [{"role": "user", "content": contenido}], schema,
+                          motivo="clasificador", modelo=config.claude_model_clasificador())
+    datos["utilidad"] = max(0, min(10, int(datos["utilidad"])))
+    datos["deseos"] = [d for d in datos["deseos"] if d["quien"] in nombres and d["deseo"].strip()]
+    return datos
+
+
+INTERVENCION_SISTEMA = """Eres "Pimpollo", el bot asistente de una pareja en Chile, y estás en su grupo de Telegram.
+Nadie te llamó: decidiste meterte porque crees que puedes ayudar con lo que están conversando. Escribe UN mensaje
+corto (1 a 3 frases) que aporte algo concreto: una propuesta, una idea de lo que tienen anotado, o un ofrecimiento
+de anotarlo/recordarlo.
+
+Reglas:
+- Personalidad: amigo chileno buena onda, modismos suaves (wena, cachai, al tiro, bacán), 1 o 2 emojis como máximo.
+  Varía cómo partes el mensaje; no empieces siempre igual.
+- Nunca finjas emociones ni recuerdos: no digas "me acuerdo", "me encantó", "extrañaba". Solo usa datos que estén
+  en el contexto, y si los usas, que se note que es algo que ellos te contaron o anotaron.
+- No inventes datos de ellos, lugares cerrados ni precios exactos.
+- Nunca tomes partido entre ellos ni juzgues gastos o decisiones.
+- No hables de temas delicados ni de lo que no tenga que ver con la conversación.
+- Si al final no tienes nada útil que aportar, intervenir = false y mensaje = ""."""
+
+
+async def redactar_intervencion(tramo: str, evaluacion: dict, contexto: str) -> dict:
+    """{"intervenir": bool, "mensaje": str} redactado con el modelo principal."""
+    schema = _obj({"intervenir": {"type": "boolean"}, "mensaje": _TEXTO})
+    contenido = (f"{contexto}\n\nConversación reciente:\n{tramo}\n\n"
+                 f"Lo que viste: tema = {evaluacion['tema']}; podrías ayudar con: {evaluacion['oportunidad']} "
+                 f"({evaluacion['que_aportaria']}).")
+    return await _llamar(INTERVENCION_SISTEMA, [{"role": "user", "content": contenido}], schema,
+                         motivo="iniciativa")
