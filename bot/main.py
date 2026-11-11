@@ -15,7 +15,7 @@ from telegram.error import TelegramError
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           filters)
 
-from bot import automatico, comun, consultas, conversacion, hogar, interprete, pareja, plata
+from bot import automatico, comun, consultas, conversacion, historial, hogar, interprete, pareja, plata
 from core import config, db, estado, finanzas, metas
 from core import hogar as hogar_core
 from dashboard import web as dashboard_web
@@ -199,6 +199,13 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         anterior = (comun.sin_marca_prueba(previo["mensaje"]), previo["crudo"])
         prueba = prueba or previo["es_prueba"]
 
+    # El hilo de la charla (antes de anotar este mensaje) y el mensaje del bot al que responde, si cita uno.
+    chat_id = update.effective_chat.id
+    hilo = historial.reciente(chat_id)
+    historial.anotar(chat_id, usuario["nombre"], texto)
+    citado = update.message.reply_to_message
+    responde_a = (citado.text or citado.caption or "") if citado and citado.from_user.id == context.bot.id else ""
+
     if not grupo:
         await update.message.chat.send_action(ChatAction.TYPING)
     try:
@@ -207,7 +214,7 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             finanzas.nombres_categorias("gasto"), finanzas.nombres_categorias("ingreso"),
             [m["nombre"] for m in metas.listar()], tareas,
             anterior=anterior, contexto=contexto, intencion=intencion_forzada,
-            motivo="grupo" if grupo else "mensaje",
+            motivo="grupo" if grupo else "mensaje", hilo=hilo, responde_a=responde_a,
         )
     except interprete.ErrorInterprete as e:
         await update.message.reply_text(str(e))
@@ -301,7 +308,9 @@ def _crear_app() -> Application:
     }
 
     # El estado (propuestas por confirmar, respuestas esperadas...) se guarda en Postgres: sobrevive a los deploys.
-    app = Application.builder().token(config.telegram_bot_token()).persistence(estado.PersistenciaPostgres()).build()
+    # BotConMemoria anota lo que el bot dice en el hilo corto de cada chat (para entender "eso", "añádelo de nuevo").
+    app = (Application.builder().bot(historial.BotConMemoria(config.telegram_bot_token()))
+           .persistence(estado.PersistenciaPostgres()).build())
     app.add_handler(CommandHandler("start", start))  # abierto: valida invitaciones
     for nombre, handler in comandos.items():
         app.add_handler(CommandHandler(nombre, handler, filters=autorizados))

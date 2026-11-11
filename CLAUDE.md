@@ -121,6 +121,9 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
   el gasto del mes con SQL usando los precios de `core/costos.py` (actualizarlos si cambian). Ahorros: los
   correos sin ningún monto se descartan sin llamar a Claude, y en avisos automáticos con intención "otro"
   no se hace el paso 2 (`extraer_otro=False`).
+- Hilo de la conversación (`bot/historial.py`): por chat, los últimos 10 mensajes de los últimos 30 min (del
+  usuario y del bot; `BotConMemoria` anota todo lo que el bot envía o edita). Va al intérprete como "Conversación
+  reciente" junto con el mensaje del bot que el usuario cita (responder). Solo en memoria: un deploy lo olvida.
 - `bot/plata.py`: gastos/ingresos/pagos (con Confirmar/Corregir), /saldo, /resumen, /pague, avisos.
 - `bot/hogar.py`: metas, lista de compras, recordatorios, panoramas y notas de la casa.
 - `bot/comun.py`: utilidades compartidas.

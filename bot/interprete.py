@@ -153,6 +153,15 @@ Si la imagen no es una boleta ni comprobante, intencion = "otro" y en respuesta 
 Fechas: interpreta "hoy", "ayer", "mañana", "el sábado", etc. respecto de la fecha y hora actuales que vienen
 en el mensaje. Para movimientos y pagos, si no se menciona fecha usa hoy.
 
+Conversación: a veces viene la "Conversación reciente" y/o el mensaje tuyo al que el usuario responde. Úsalos
+SOLO para entender a qué se refiere el mensaje actual ("eso", "ese gasto", "estaba bien", "añádelo de nuevo",
+"sí, a medias", "no, eran 5 lucas"). Interpretas SIEMPRE el mensaje actual: nunca repitas una acción de un
+mensaje anterior que ya se hizo, y un "gracias" o "ok" es otro. Si pide volver a anotar un movimiento que se
+borró o deshizo ("me equivoqué, estaba bien", "añádelo de nuevo"), es movimientos con los datos de ese
+movimiento tal como aparecen en la conversación (monto, categoría, descripción, fecha, compartido). Si pide
+cambiar algo de un gasto que ya quedó anotado, es editar_movimiento con objetivo tomado de la conversación.
+Si en "otro" respondes, sigue el hilo de la conversación y no pidas datos que ya se dijeron.
+
 respuesta: SOLO si intencion es "otro", una frase corta con la personalidad de abajo; si no, "".
 Si se te entrega una corrección de una interpretación anterior, devuelve la interpretación completa ya
 corregida.
@@ -322,6 +331,8 @@ async def interpretar(
     intenciones_posibles: list[str] | None = None,
     motivo: str = "mensaje",
     extraer_otro: bool = True,
+    hilo: str = "",
+    responde_a: str = "",
 ) -> dict:
     """Interpreta en dos pasos: (1) la intención, (2) los datos de esa intención con un schema chico.
 
@@ -340,6 +351,10 @@ async def interpretar(
             f"{f['nombre']} {f['fecha']:%Y-%m-%d}" for f in proximos) + ".\n"
     if contexto:
         encabezado += f"Contexto: {contexto}\n"
+    if hilo:
+        encabezado += f"Conversación reciente (solo para entender referencias):\n{hilo}\n"
+    if responde_a:
+        encabezado += f"El usuario está RESPONDIENDO a este mensaje tuyo: «{responde_a[:600]}»\n"
 
     if anterior:
         original, previa = anterior
