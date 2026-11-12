@@ -12,6 +12,11 @@ def conectar() -> psycopg.Connection:
     return psycopg.connect(config.database_url(), row_factory=dict_row)
 
 
+def cambiar_nombre(usuario_id: int, nombre: str) -> None:
+    with conectar() as conn:
+        conn.execute("UPDATE usuarios SET nombre = %s WHERE id = %s", (nombre, usuario_id))
+
+
 def registrar_usuario(telegram_id: int, nombre: str) -> dict:
     """Crea el usuario si no existe y lo devuelve."""
     with conectar() as conn:

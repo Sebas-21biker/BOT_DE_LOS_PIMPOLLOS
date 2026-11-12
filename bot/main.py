@@ -25,31 +25,38 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpx2").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
-AYUDA = (
+_AYUDA = (
     "✍️ <b>Escríbeme normal, como en tus notas:</b>\n\n"
     "💸 <i>hoy gasté 3500 en uber</i> · <i>cena 40 lucas a medias</i>\n"
-    "🤝 <i>le transferí 25 lucas a la Cami</i> (para saldar)\n"
+    "🤝 <i>le transferí 25 lucas a {pareja}</i> (para saldar)\n"
     "💳 <i>compré una tele en 600 lucas en 6 cuotas</i> · <i>mi tarjeta factura el 25 y se paga el 5</i>\n"
     "📌 <i>mi sueldo es 1.200.000 y me llega el 30</i> (te pregunto cada mes)\n"
     "🎯 <i>queremos juntar 2 millones para México en julio</i> · <i>aparté 50 lucas para México</i>\n"
     "🛒 <i>agrega leche y huevos a la lista</i>\n"
-    "⏰ <i>recuérdame pagar la luz el 5 a las 10</i> · <i>el 3 de marzo es el cumple de la Cami</i>\n"
+    "⏰ <i>recuérdame pagar la luz el 5 a las 10</i> · <i>el 3 de marzo es el cumple de {pareja}</i>\n"
     "📅 <i>el sábado vamos al asado de Juan a las 14</i> · <i>¿qué planes tenemos?</i>\n"
     "📍 <i>anota el restaurante Liguria para ir</i> · <i>¿qué hacemos hoy?</i>\n"
     "📌 <i>la clave del wifi es pimpollo123</i> · <i>¿cuál era la clave del wifi?</i>\n"
     "❓ <i>¿cuánto gastamos en uber este año?</i> · <i>¿en qué gastamos más este mes?</i>\n"
-    "💝 <i>a la Cami le encanta el sushi</i> · <i>¿qué le gusta a la Cami?</i>\n"
-    "💡 <i>recomiéndanos algo para el sábado</i> · <i>ideas de regalo para la Cami</i>\n"
+    "💝 <i>a {pareja} le encanta el sushi</i> · <i>¿qué le gusta a {pareja}?</i>\n"
+    "💡 <i>recomiéndanos algo para el sábado</i> · <i>ideas de regalo para {pareja}</i>\n"
     "📷 Mándame la foto de una boleta y la anoto\n\n"
     "📋 <b>Comandos</b>\n"
     "/panel · /dashboard · /ultimos · /saldo · /resumen · /semana · /cuotas · /fijos · /metas · /lista · /tareas · /menu\n"
     "/recordatorios · /planes · /panoramas · /notas · /perfil · /ideas · /pregunta · /feriados · /invitar\n"
     "🙋 /iniciativa: cuánto me meto solo en la charla del grupo (y avisos de sorpresas por privado)\n"
     "📱 /automatico (pagos con el celular) y 🏦 /correo (correos del banco) para anotar solos, con tu confirmación\n"
-    "/gasto, /ingreso y /pague para anotar rápido sin IA\n\n"
+    "/gasto, /ingreso y /pague para anotar rápido sin IA\n"
+    "✏️ /nombre Ricardo: cómo quieres que te llame\n\n"
     "🧪 Si escribes <b>test</b> en un gasto o pago, lo anoto como prueba (no cuenta). "
     "Los borras con /borrar_pruebas"
 )
+
+
+def texto_ayuda(usuario: dict) -> str:
+    """La ayuda con el nombre real de la pareja en los ejemplos (o "tu pareja" si aún no se registra)."""
+    pareja = finanzas.otro_usuario(usuario["id"])
+    return _AYUDA.format(pareja=escape(comun.primer_nombre(pareja)) if pareja else "tu pareja")
 
 
 # ---------- comandos generales ----------
@@ -80,12 +87,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if usuario is None:
         await update.message.reply_text("🙅 Este bot es privado. Si tu pareja lo usa, pídele un link con /invitar")
         return
-    await update.message.reply_text(f"¡Wena {escape(usuario['nombre'])}! Ya quedaste registrado 🐣\n\n{AYUDA}",
-                                    parse_mode="HTML")
+    await update.message.reply_text(f"¡Wena {escape(usuario['nombre'])}! Ya quedaste registrado 🐣\n\n"
+                                    f"{texto_ayuda(usuario)}", parse_mode="HTML")
 
 
 async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(AYUDA, parse_mode="HTML")
+    usuario = await comun.usuario_o_aviso(update)
+    if usuario is not None:
+        await update.message.reply_text(texto_ayuda(usuario), parse_mode="HTML")
+
+
+async def cmd_nombre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/nombre Catalina — cómo te llama el bot (al registrarse se toma el nombre de Telegram)."""
+    usuario = await comun.usuario_o_aviso(update)
+    if usuario is None:
+        return
+    nuevo = " ".join(context.args).strip()[:40]
+    if not nuevo:
+        await update.message.reply_text(f"Ahora te llamo <b>{escape(usuario['nombre'])}</b>. Para cambiarlo: "
+                                        "<code>/nombre Tu Nombre</code>", parse_mode="HTML")
+        return
+    db.cambiar_nombre(usuario["id"], nuevo)
+    await update.message.reply_text(f"✅ Listo, desde ahora eres <b>{escape(nuevo)}</b> 🐣", parse_mode="HTML")
 
 
 def _boton_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardButton | None:
@@ -320,7 +343,7 @@ def _crear_app() -> Application:
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
         "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas, "semana": consultas.cmd_semana,
         "tareas": hogar.cmd_tareas, "menu": _cmd_menu, "planes": hogar.cmd_planes, "iniciativa": conversacion.cmd_iniciativa,
-        "cuotas": compromisos.cmd_compromisos, "fijos": compromisos.cmd_compromisos,
+        "cuotas": compromisos.cmd_compromisos, "fijos": compromisos.cmd_compromisos, "nombre": cmd_nombre,
     }
 
     # El estado (propuestas por confirmar, respuestas esperadas...) se guarda en Postgres: sobrevive a los deploys.

@@ -153,7 +153,7 @@ async def ver_perfil(update: Update, usuario: dict, filtro: dict | None = None) 
     if not filas:
         await update.effective_message.reply_text(
             "🤔 Todavía no sé eso. Cuéntenme cosas, tipo:\n"
-            "<i>a la Cami le encanta el sushi</i> · <i>mi horario es de 9 a 18</i> · "
+            f"<i>a {escape(_nombre_pareja(usuario))} le encanta el sushi</i> · <i>mi horario es de 9 a 18</i> · "
             "<i>soñamos con ir a Japón</i>", parse_mode="HTML")
         return
     await update.effective_message.reply_text("💝 <b>Lo que sé de ustedes</b>\n\n" + _texto_perfil(filas, usuario),
@@ -278,8 +278,14 @@ async def cb_pedir_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await pedir_ideas(update, context, usuario, pedido or "ideas para hacer juntos")
 
 
+def _nombre_pareja(usuario: dict) -> str:
+    pareja = finanzas.otro_usuario(usuario["id"])
+    return comun.primer_nombre(pareja) if pareja else "tu pareja"
+
+
 async def cmd_feriados(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if await comun.usuario_o_aviso(update) is None:
+    usuario = await comun.usuario_o_aviso(update)
+    if usuario is None:
         return
     lista = feriados.proximos(finanzas.hoy(), dias=120)
     lineas = ["🗓️ <b>Feriados y fechas especiales</b> (próximos 4 meses)", ""]
@@ -289,7 +295,7 @@ async def cmd_feriados(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         lineas.append(f"{emoji} {comun.DIAS[f['fecha'].weekday()]} {comun.formatear_fecha(f['fecha'])}: "
                       f"{escape(f['nombre'])}{extra}")
     lineas += ["", "<i>¿Cumpleaños, aniversario o el santo de alguien? Díganme, tipo: "
-                   "«el santo de la Cami es el 26 de julio», y les aviso con ideas una semana antes 😉</i>"]
+                   f"«el santo de {escape(_nombre_pareja(usuario))} es el 26 de julio», y les aviso con ideas una semana antes 😉</i>"]
     await update.effective_message.reply_text("\n".join(lineas), parse_mode="HTML")
 
 

@@ -59,7 +59,7 @@ datos de esa intención.
    - cuotas: número de cuotas si dice que fue en cuotas ("en 6 cuotas", "a 12 cuotas"); si no, 1 (contado,
      débito, "sin cuotas", ingresos). monto es SIEMPRE el TOTAL de la compra: "6 cuotas de 110 lucas" -> 660000.
    - tarjeta: el nombre de la tarjeta o banco si lo menciona ("con la CMR", "con la del Chile"); si no, "".
-2. pago_pareja: transferencias ENTRE ellos para saldar deudas ("le transferí 20 lucas a la Cami",
+2. pago_pareja: transferencias ENTRE ellos para saldar deudas ("le transferí 20 lucas a mi pareja",
    "me pagó lo de la cena"). direccion = "yo_pago" si el usuario le pagó a la pareja, "me_pagan" si al revés.
    Esto NO es un gasto ni un ingreso.
 3. meta_nueva: crear una meta de ahorro ("queremos juntar 2 millones para México en julio").
@@ -72,7 +72,7 @@ datos de esa intención.
    producto, nombre en minúsculas, cantidad "" si no dice.
 7. ver_lista: quiere ver la lista de compras.
 8. recordatorio: avisar algo en una fecha/hora ("recuérdame pagar la luz el 5 a las 10",
-   "el 3 de marzo es el cumpleaños de la Cami"). fecha_hora "YYYY-MM-DDTHH:MM" en hora de Chile, siempre
+   "el 3 de marzo es el cumpleaños de mi pareja"). fecha_hora "YYYY-MM-DDTHH:MM" en hora de Chile, siempre
    en el futuro; si no da hora usa 09:00. repetir: nunca/diario/semanal/mensual/anual (cumpleaños y
    aniversarios = anual; "todos los meses" = mensual). para = "yo" si es solo para el usuario
    ("recuérdame"), "ambos" si es para los dos ("recuérdanos", fechas especiales, cuentas de la casa).
@@ -110,25 +110,25 @@ datos de esa intención.
 18. menu_semanal: pide ideas de comidas o un menú para la semana. busqueda = preferencias mencionadas
     ("vegetariano", "rápido", "barato", "solo 3 días") o "".
 19. perfil_guardar: datos sobre las personas para conocerse y sorprenderse: gustos, comidas favoritas,
-    sueños, horario de trabajo, amigos, deportes, música, ideas de regalo ("a la Cami le encanta el sushi",
+    sueños, horario de trabajo, amigos, deportes, música, ideas de regalo ("a mi pareja le encanta el sushi",
     "mi horario es de 9 a 18", "nuestros amigos son Juan y Pedro", "sueño con ir a Japón", "juego pádel
     los martes"). Un ítem por dato. sobre: "yo" (quien escribe), "pareja" o "ambos" (de los dos, ej: amigos en
     común, sueños compartidos). categoria: gustos/comida/suenos/trabajo/amigos/deportes/regalos/musica/otro.
     dato: frase corta y clara en tercera persona sin el nombre ("le encanta el sushi", "trabaja de 9 a 18");
     si es de los dos, en plural ("sueñan con ir a Japón", "sus amigos son Juan y la Fran").
-    explicito: true si lo cuenta como un dato ("a la Cami le encanta el sushi", "anota que..."); false si
+    explicito: true si lo cuenta como un dato ("a mi pareja le encanta el sushi", "anota que..."); false si
     solo lo deduces de algo que dijo de pasada ("uf, otra vez cilantro" -> no le gusta el cilantro). No
     deduzcas nada que no se desprenda claramente del mensaje.
     privado: true si pide que la pareja no lo sepa ("no le digas", "es secreto", "es sorpresa").
     vigente_hasta: YYYY-MM-DD si el dato es temporal ("este mes estoy a dieta" -> fin de mes); si no, "".
     Ojo: datos prácticos de la casa (wifi, contactos, códigos) son nota_guardar, no perfil.
-20. perfil_ver: preguntan qué saben de alguien ("¿qué le gusta a la Cami?", "¿cuál es mi horario?",
+20. perfil_ver: preguntan qué saben de alguien ("¿qué le gusta a mi pareja?", "¿cuál es mi horario?",
     "¿qué sueños tenemos?"). Llena perfil_filtro: sobre (yo/pareja/ambos/todos) y categoria (o "todas").
     "¿Qué le gusta a X?" o "¿qué sabes de X?" van con categoria "todas" (los gustos están repartidos en
     comida, deportes, música...); usa una categoría solo si preguntan por algo específico (horario, sueños).
     busqueda: palabras clave si preguntan por algo puntual ("¿le gusta el cilantro?" -> "cilantro"); si no, "".
 21. pedir_ideas: piden que les RECOMIENDES algo nuevo: una cita, un regalo, un panorama para el finde, una
-    sorpresa ("recomiéndanos algo para el sábado", "ideas de regalo para la Cami", "¿qué podríamos hacer
+    sorpresa ("recomiéndanos algo para el sábado", "ideas de regalo para mi pareja", "¿qué podríamos hacer
     distinto?"). busqueda = qué tipo de idea piden, con los detalles (presupuesto, para quién, cuándo).
     (Si en cambio preguntan qué hacer de lo que YA tienen anotado, es panorama_sugerir.)
 22. editar_movimiento: corregir un gasto/ingreso YA guardado ("corrige el uber de ayer, eran 4500",
