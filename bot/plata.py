@@ -8,7 +8,7 @@ from telegram.ext import ContextTypes
 
 from bot import comun
 from bot.comun import boton, primer_nombre, teclado
-from core import finanzas, parser
+from core import compromisos, finanzas, parser
 from core.finanzas import formatear_clp
 
 # Propuestas interpretadas por la IA que esperan Confirmar / Corregir / Cancelar.
@@ -117,11 +117,19 @@ async def botones_propuesta(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await query.answer(problema, show_alert=True)
             return
         _pendientes(context).pop(pid)
-        ids = [comun.guardar_movimiento(m, usuario, pareja, pendiente["mensaje"]) for m in pendiente["items"]]
+        # Una compra en cuotas no se anota completa: queda un plan que anota cada cuota el mes que toca.
+        ids, planes = [], []
+        for m in pendiente["items"]:
+            if m.get("cuotas", 1) > 1:
+                planes.append(compromisos.crear_plan(m, usuario["id"], pendiente["mensaje"]))
+            else:
+                ids.append(comun.guardar_movimiento(m, usuario, pareja, pendiente["mensaje"]))
         cuerpo = "\n\n".join(comun.describir_movimiento(m, usuario, pareja) for m in pendiente["items"])
         await query.answer("Guardado")
+        botones = ([boton("↩️ Deshacer", "deshacer:" + ",".join(map(str, ids)))] if ids else []) + (
+            [boton("↩️ Deshacer cuotas", "dcuotas:" + ",".join(map(str, planes)))] if planes else [])
         await query.edit_message_text(f"✅ ¡Listo, anotado!\n\n{cuerpo}", parse_mode="HTML",
-                                      reply_markup=teclado([boton("↩️ Deshacer", "deshacer:" + ",".join(map(str, ids)))]))
+                                      reply_markup=teclado(botones))
         compartidos = [m for m in pendiente["items"] if m["porcentaje_pagador"] is not None and not m["es_prueba"]]
         if compartidos:
             await _avisar_compartidos(context, update, usuario, compartidos)
@@ -175,6 +183,12 @@ async def proponer_edicion(update: Update, context: ContextTypes.DEFAULT_TYPE, u
         nuevo["porcentaje_pagador"] = k["porcentaje_pagador"]
     elif k["compartido"] == "no":
         nuevo["porcentaje_pagador"] = None
+    if k.get("cuotas"):
+        if actual["tipo"] != "gasto" or actual.get("plan_cuotas_id"):
+            await update.effective_message.reply_text("🤔 Solo puedo pasar a cuotas un gasto normal (no un ingreso ni "
+                                                      "una cuota que ya es parte de otra compra).")
+            return
+        nuevo["cuotas"], nuevo["tarjeta"] = k["cuotas"], ""
 
     pareja = finanzas.otro_usuario(usuario["id"])
     if nuevo["porcentaje_pagador"] is not None and pareja is None:
@@ -221,6 +235,18 @@ async def _confirmar_edicion(update: Update, context, usuario: dict, pendiente: 
         ok = finanzas.borrar_movimiento(pendiente["movimiento_id"], usuario["id"])
         await query.edit_message_text(f"🗑️ Borrado\n\n{texto_antes}" if ok else "🤔 Ya no existía.", parse_mode="HTML")
         cambio_txt = f"borró un gasto compartido: {escape(antes['descripcion'] or antes['categoria'])}"
+    elif pendiente["items"][0].get("cuotas", 1) > 1:
+        # Pasar a cuotas: el gasto completo se reemplaza por un plan que anota cada cuota cuando toca.
+        nuevo = pendiente["items"][0]
+        ok = finanzas.borrar_movimiento(pendiente["movimiento_id"], usuario["id"])
+        if ok:
+            compromisos.crear_plan(nuevo, usuario["id"], pendiente["mensaje"])
+        await query.edit_message_text(
+            ("✅ ¡Pasado a cuotas!\n\n" + comun.describir_movimiento(nuevo, usuario, pareja)
+             + "\n\nLo ves en /cuotas") if ok else "🤔 Ya no existía.",
+            parse_mode="HTML")
+        cambio_txt = (f"pasó a {nuevo['cuotas']} cuotas un gasto compartido: "
+                      f"{escape(nuevo['descripcion'] or nuevo['categoria'])}")
     else:
         nuevo = pendiente["items"][0]
         repartos = None
@@ -299,6 +325,10 @@ async def _avisar_compartidos(context, update: Update, usuario: dict, movimiento
     lineas = [f"🔔 <b>{escape(primer_nombre(usuario))}</b> anotó un gasto compartido:"]
     for m in movimientos:
         tu_parte = comun.monto_clp(m) * (100 - m["porcentaje_pagador"]) / 100
+        if m.get("cuotas", 1) > 1:
+            lineas.append(f"• {escape(m['descripcion'] or m['categoria'])}: {comun.formatear_monto(m['monto'], m['moneda'])} "
+                          f"en {m['cuotas']} cuotas → te toca ~{formatear_clp(tu_parte / m['cuotas'])} al mes")
+            continue
         lineas.append(f"• {escape(m['descripcion'] or m['categoria'])}: {comun.formatear_monto(m['monto'], m['moneda'])} "
                       f"→ te toca {formatear_clp(tu_parte)}")
     lineas += ["", comun.texto_saldo()]
@@ -324,7 +354,8 @@ async def deshacer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     tipo, ids_txt = query.data.split(":")
     ids = [int(x) for x in ids_txt.split(",")]
-    borrar = finanzas.borrar_movimiento if tipo == "deshacer" else finanzas.borrar_liquidacion
+    borrar = {"deshacer": finanzas.borrar_movimiento, "dpago": finanzas.borrar_liquidacion,
+              "dcuotas": compromisos.borrar_plan}[tipo]
     if sum(borrar(i, usuario["id"]) for i in ids):
         await query.answer("Borrado")
         await query.edit_message_text(f"🗑️ Borrado, como si nada\n\n{query.message.text}", reply_markup=None)

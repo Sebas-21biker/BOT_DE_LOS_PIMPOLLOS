@@ -48,6 +48,7 @@ _RAICES = (
     # plata
     "gaste", "gastamos", "gasto", "pague", "pagamos", "pago", "transferi", "transfiri", "deposite", "compre",
     "a medias", "compartido", "saldo", "debo", "debe ", "debes", "cuanto", "presupuesto", "boleta",
+    "cuota", "tarjeta", "factura", "sueldo", "arriendo", "fijos",
     # metas
     "meta", "ahorr", "aparte ", "juntar",
     # lista de compras

@@ -36,7 +36,7 @@ INTENCIONES = [
     "panorama_agregar", "panorama_sugerir", "nota_guardar", "nota_buscar",
     "tarea_nueva", "ver_tareas", "tarea_hecha", "menu_semanal",
     "perfil_guardar", "perfil_ver", "pedir_ideas", "editar_movimiento", "borrar_movimiento",
-    "plan_nuevo", "ver_planes", "consulta", "otro",
+    "plan_nuevo", "ver_planes", "tarjeta_guardar", "fijo_nuevo", "ver_compromisos", "consulta", "otro",
 ]
 
 SISTEMA = """Eres el intérprete de "Pimpollo", el bot de una pareja en Chile. Recibes mensajes informales en \
@@ -56,6 +56,9 @@ datos de esa intención.
      Si no es compartido, 100.
    - categoria: la más adecuada de la lista según el tipo; si ninguna calza, "Otros" u "Otros ingresos".
    - descripcion breve en minúsculas salvo nombres propios.
+   - cuotas: número de cuotas si dice que fue en cuotas ("en 6 cuotas", "a 12 cuotas"); si no, 1 (contado,
+     débito, "sin cuotas", ingresos). monto es SIEMPRE el TOTAL de la compra: "6 cuotas de 110 lucas" -> 660000.
+   - tarjeta: el nombre de la tarjeta o banco si lo menciona ("con la CMR", "con la del Chile"); si no, "".
 2. pago_pareja: transferencias ENTRE ellos para saldar deudas ("le transferí 20 lucas a la Cami",
    "me pagó lo de la cena"). direccion = "yo_pago" si el usuario le pagó a la pareja, "me_pagan" si al revés.
    Esto NO es un gasto ni un ingreso.
@@ -134,7 +137,8 @@ datos de esa intención.
     fecha = YYYY-MM-DD si dice cuándo fue o "".
     cambios: solo lo que cambia; lo demás vacío: monto (0 = no cambia), categoria ("" = no cambia),
     descripcion ("" = no cambia), fecha ("" = no cambia), compartido ("si", "no" o "sin_cambio"),
-    porcentaje_pagador (si pasa a compartido: 50 para "a medias", 40 para "40/60"; si no, 0).
+    porcentaje_pagador (si pasa a compartido: 50 para "a medias", 40 para "40/60"; si no, 0),
+    cuotas (si pide pasarlo a cuotas: "esa compra fue en 6 cuotas" -> 6; si no, 0).
     Si el Contexto ya dice cuál movimiento es, deja objetivo vacío.
 23. borrar_movimiento: eliminar un gasto/ingreso ya guardado ("borra el gasto del sushi", "elimina el
     último"). objetivo igual que arriba.
@@ -143,7 +147,20 @@ datos de esa intención.
     titulo corto, fecha YYYY-MM-DD (en el futuro), hora "HH:MM" o "", lugar o "", con_quien o "".
     (Una idea sin fecha para algún día es panorama_agregar; algo que hay que avisar es recordatorio.)
 25. ver_planes: quieren ver qué planes tienen ("¿qué tenemos este finde?", "¿qué planes hay?").
-26. otro: cualquier otra cosa (saludos, conversación).
+26. tarjeta_guardar: datos de SU tarjeta de crédito: día de facturación y/o de pago ("mi tarjeta factura el 25 y
+    se paga el 5", "la CMR cierra el 20 y vence el 10"). nombre: banco o tarjeta ("Banco de Chile", "CMR
+    Falabella") o "Tarjeta de crédito" si no dice. dia_facturacion (1-31, también "cierra" o "corte"),
+    dia_vencimiento (1-31, "se paga", "vence"; 0 si no lo dice). Si no dice el día de facturación, es otro y
+    en respuesta pregúntalo.
+27. fijo_nuevo: un ingreso o gasto que se repite TODOS LOS MESES y quiere que se considere mes a mes ("mi sueldo
+    es 1.200.000 y me llega el 30", "el arriendo son 450 lucas el 5 de cada mes, a medias", "pago Netflix
+    9.990 el 15"). Un ítem por fijo: tipo, monto, moneda, categoria, descripcion ("sueldo", "arriendo"),
+    dia_del_mes (1-31; "fin de mes" = 30), compartido y porcentaje_pagador como en movimientos. Si no dice el
+    día del mes, es otro y en respuesta pregunta qué día llega/se paga. (Un gasto de una sola vez es movimientos;
+    algo que solo hay que recordar, sin plata, es recordatorio.)
+28. ver_compromisos: quiere ver sus fijos, sus cuotas pendientes o sus tarjetas ("¿cuánto debo en cuotas?",
+    "¿qué fijos tengo?", "¿cuándo factura mi tarjeta?").
+29. otro: cualquier otra cosa (saludos, conversación).
 
 Imágenes: si viene una foto de una boleta, voucher o comprobante, la intención es movimientos con UN solo
 gasto por el TOTAL pagado (no cada ítem): descripcion = comercio (y qué se compró, breve), fecha = la de la
@@ -195,6 +212,21 @@ def _campos(categorias: list[str]) -> dict:
             "categoria": {"type": "string", "enum": categorias},
             "descripcion": _TEXTO,
             "fecha": _FECHA,
+            "compartido": {"type": "boolean"},
+            "porcentaje_pagador": _NUMERO,
+            "cuotas": {"type": "integer"},
+            "tarjeta": _TEXTO,
+        })},
+        "tarjetas": {"type": "array", "items": _obj({
+            "nombre": _TEXTO, "dia_facturacion": {"type": "integer"}, "dia_vencimiento": {"type": "integer"},
+        })},
+        "fijos": {"type": "array", "items": _obj({
+            "tipo": {"type": "string", "enum": ["gasto", "ingreso"]},
+            "monto": _NUMERO,
+            "moneda": {"type": "string", "enum": ["CLP", "USD", "MXN"]},
+            "categoria": {"type": "string", "enum": categorias},
+            "descripcion": _TEXTO,
+            "dia_del_mes": {"type": "integer"},
             "compartido": {"type": "boolean"},
             "porcentaje_pagador": _NUMERO,
         })},
@@ -253,6 +285,7 @@ def _campos(categorias: list[str]) -> dict:
         "cambios": _obj({
             "monto": _NUMERO, "categoria": _TEXTO, "descripcion": _TEXTO, "fecha": _TEXTO,
             "compartido": {"type": "string", "enum": ["sin_cambio", "si", "no"]}, "porcentaje_pagador": _NUMERO,
+            "cuotas": {"type": "integer"},
         }),
         "respuesta": _TEXTO,
     }
@@ -267,6 +300,7 @@ _CAMPOS_POR_INTENCION = {
     "menu_semanal": ["busqueda"], "perfil_guardar": ["perfil"], "perfil_ver": ["perfil_filtro"],
     "pedir_ideas": ["busqueda"], "consulta": ["consulta"], "otro": ["respuesta"],
     "editar_movimiento": ["objetivo", "cambios"], "borrar_movimiento": ["objetivo"], "plan_nuevo": ["planes"],
+    "tarjeta_guardar": ["tarjetas"], "fijo_nuevo": ["fijos"],
 }
 
 # Valores por defecto de los campos que una intención no extrae (así el resto del bot no tiene que preguntar).
@@ -274,11 +308,12 @@ _VACIO = {
     "movimientos": [], "pagos": [], "metas_nuevas": [], "aportes": [], "compras": [], "recordatorios": [],
     "panoramas": [], "notas": [], "perfil": [], "tareas": [], "filtro_tipo": "cualquiera", "busqueda": "",
     "respuesta": "", "perfil_filtro": {"sobre": "todos", "categoria": "todas", "busqueda": ""}, "planes": [],
+    "tarjetas": [], "fijos": [],
     "consulta": {"metrica": "gastos", "desde": "", "hasta": "", "categoria": "todas", "persona": "ambos",
                  "agrupar": "nada", "busqueda": ""},
     "objetivo": {"busqueda": "", "fecha": ""},
     "cambios": {"monto": 0, "categoria": "", "descripcion": "", "fecha": "", "compartido": "sin_cambio",
-                "porcentaje_pagador": 0},
+                "porcentaje_pagador": 0, "cuotas": 0},
 }
 
 
@@ -421,6 +456,9 @@ def _validar(datos: dict, ahora: datetime, categorias_gasto: list[str], categori
     datos["tareas"] = [t for t in datos["tareas"] if t["cada_dias"] > 0]
     datos["perfil"] = [_validar_dato_perfil(d) for d in datos["perfil"] if d["dato"].strip()]
     datos["planes"] = [_validar_plan(p, hoy) for p in datos["planes"] if p["titulo"].strip()]
+    datos["tarjetas"] = [_validar_tarjeta(t) for t in datos["tarjetas"] if 1 <= t["dia_facturacion"] <= 31]
+    datos["fijos"] = [_validar_fijo(f, categorias_gasto, categorias_ingreso, hoy) for f in datos["fijos"]
+                      if 1 <= f["dia_del_mes"] <= 31]
     c = datos["consulta"]
     c["desde"] = _fecha(c["desde"], hoy.replace(day=1))
     c["hasta"] = _fecha(c["hasta"], hoy)
@@ -432,12 +470,14 @@ def _validar(datos: dict, ahora: datetime, categorias_gasto: list[str], categori
     k["fecha"] = _fecha(k["fecha"], None) if k["fecha"] else None
     k["monto"] = Decimal(str(k["monto"])).quantize(Decimal("0.01")) if k["monto"] and k["monto"] > 0 else None
     k["porcentaje_pagador"] = Decimal(str(k["porcentaje_pagador"])) if 0 < k["porcentaje_pagador"] <= 100 else Decimal(50)
+    k["cuotas"] = k.get("cuotas") if 2 <= (k.get("cuotas") or 0) <= 60 else 0
 
     # Si la intención quedó sin datos, se trata como conversación.
     requeridos = {"movimientos": "movimientos", "pago_pareja": "pagos", "meta_nueva": "metas_nuevas",
                   "meta_aporte": "aportes", "compras_agregar": "compras", "recordatorio": "recordatorios",
                   "panorama_agregar": "panoramas", "nota_guardar": "notas", "tarea_nueva": "tareas",
-                  "perfil_guardar": "perfil", "plan_nuevo": "planes"}
+                  "perfil_guardar": "perfil", "plan_nuevo": "planes", "tarjeta_guardar": "tarjetas",
+                  "fijo_nuevo": "fijos"}
     lista = requeridos.get(datos["intencion"])
     if lista and not datos[lista]:
         datos["intencion"] = "otro"
@@ -479,6 +519,7 @@ def _validar_movimiento(m: dict, cat_gasto: list[str], cat_ingreso: list[str], h
         if not 0 <= porcentaje <= 100:
             porcentaje = Decimal(50)
 
+    cuotas = m.get("cuotas") or 1
     return {
         "tipo": m["tipo"],
         "monto": _monto(m["monto"]),
@@ -487,7 +528,21 @@ def _validar_movimiento(m: dict, cat_gasto: list[str], cat_ingreso: list[str], h
         "descripcion": m["descripcion"].strip(),
         "fecha": _fecha(m["fecha"], hoy),
         "porcentaje_pagador": porcentaje,
+        "cuotas": cuotas if m["tipo"] == "gasto" and 2 <= cuotas <= 60 else 1,
+        "tarjeta": (m.get("tarjeta") or "").strip(),
     }
+
+
+def _validar_tarjeta(t: dict) -> dict:
+    vence = t["dia_vencimiento"]
+    return {"nombre": t["nombre"].strip()[:60] or "Tarjeta de crédito", "dia_facturacion": t["dia_facturacion"],
+            "dia_vencimiento": vence if 1 <= vence <= 31 else None}
+
+
+def _validar_fijo(f: dict, cat_gasto: list[str], cat_ingreso: list[str], hoy: date) -> dict:
+    base = _validar_movimiento({**f, "fecha": "", "cuotas": 1, "tarjeta": ""}, cat_gasto, cat_ingreso, hoy)
+    return {k: base[k] for k in ("tipo", "monto", "moneda", "categoria", "descripcion", "porcentaje_pagador")} | {
+        "dia_del_mes": f["dia_del_mes"]}
 
 
 def _validar_dato_perfil(d: dict) -> dict:

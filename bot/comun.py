@@ -10,7 +10,7 @@ from telegram import Bot, CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from telegram.constants import ChatType
 from telegram.error import TelegramError
 
-from core import cambio, finanzas
+from core import cambio, compromisos, finanzas
 from core.finanzas import formatear_clp
 
 log = logging.getLogger(__name__)
@@ -132,6 +132,8 @@ def describir_movimiento(mov: dict, usuario: dict, pareja: dict | None) -> str:
     ]
     if mov["descripcion"]:
         lineas.append(f"📝 {escape(mov['descripcion'])}")
+    if mov.get("cuotas", 1) > 1:
+        lineas.append(texto_cuotas(mov, usuario))
     pct = mov["porcentaje_pagador"]
     if pct is not None:
         nombre_pareja = escape(pareja["nombre"]) if pareja else "tu pareja"
@@ -146,6 +148,15 @@ def describir_movimiento(mov: dict, usuario: dict, pareja: dict | None) -> str:
     if mov.get("es_prueba"):
         lineas.append("🧪 <b>PRUEBA</b>: no cuenta en saldos ni resúmenes")
     return "\n".join(lineas)
+
+
+def texto_cuotas(mov: dict, usuario: dict) -> str:
+    """Línea que explica cómo se anotará una compra en cuotas (la cuota y desde cuándo)."""
+    plan = compromisos.plan_para(mov, usuario["id"])
+    cuota = formatear_monto(plan["montos"][0], mov["moneda"])
+    tarjeta = f" · {escape(plan['tarjeta']['nombre'])}" if plan["tarjeta"] else ""
+    return (f"💳 En <b>{mov['cuotas']} cuotas de {cuota}</b>{tarjeta}: anoto una cada mes, "
+            f"la primera el {formatear_fecha(plan['primera_fecha'])}")
 
 
 def guardar_movimiento(mov: dict, usuario: dict, pareja: dict | None, mensaje_original: str) -> int:

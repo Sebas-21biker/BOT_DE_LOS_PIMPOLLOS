@@ -15,7 +15,7 @@ from telegram.error import TelegramError
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           filters)
 
-from bot import automatico, comun, consultas, conversacion, historial, hogar, interprete, pareja, plata
+from bot import automatico, comun, compromisos, consultas, conversacion, historial, hogar, interprete, pareja, plata
 from core import config, db, estado, finanzas, metas
 from core import hogar as hogar_core
 from dashboard import web as dashboard_web
@@ -29,6 +29,8 @@ AYUDA = (
     "✍️ <b>Escríbeme normal, como en tus notas:</b>\n\n"
     "💸 <i>hoy gasté 3500 en uber</i> · <i>cena 40 lucas a medias</i>\n"
     "🤝 <i>le transferí 25 lucas a la Cami</i> (para saldar)\n"
+    "💳 <i>compré una tele en 600 lucas en 6 cuotas</i> · <i>mi tarjeta factura el 25 y se paga el 5</i>\n"
+    "📌 <i>mi sueldo es 1.200.000 y me llega el 30</i> (te pregunto cada mes)\n"
     "🎯 <i>queremos juntar 2 millones para México en julio</i> · <i>aparté 50 lucas para México</i>\n"
     "🛒 <i>agrega leche y huevos a la lista</i>\n"
     "⏰ <i>recuérdame pagar la luz el 5 a las 10</i> · <i>el 3 de marzo es el cumple de la Cami</i>\n"
@@ -40,7 +42,7 @@ AYUDA = (
     "💡 <i>recomiéndanos algo para el sábado</i> · <i>ideas de regalo para la Cami</i>\n"
     "📷 Mándame la foto de una boleta y la anoto\n\n"
     "📋 <b>Comandos</b>\n"
-    "/panel · /dashboard · /ultimos · /saldo · /resumen · /semana · /metas · /lista · /tareas · /menu\n"
+    "/panel · /dashboard · /ultimos · /saldo · /resumen · /semana · /cuotas · /fijos · /metas · /lista · /tareas · /menu\n"
     "/recordatorios · /planes · /panoramas · /notas · /perfil · /ideas · /pregunta · /feriados · /invitar\n"
     "🙋 /iniciativa: cuánto me meto solo en la charla del grupo (y avisos de sorpresas por privado)\n"
     "📱 /automatico (pagos con el celular) y 🏦 /correo (correos del banco) para anotar solos, con tu confirmación\n"
@@ -226,6 +228,8 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await plata.proponer(update, context, usuario, datos, mensaje_original, prueba)
     elif await hogar.manejar_intencion(update, context, usuario, datos):
         pass
+    elif await compromisos.manejar_intencion(update, context, usuario, datos):
+        pass
     elif intencion == "editar_movimiento":
         movimiento_id = movimiento_id or (previo or {}).get("movimiento_id")
         mensaje_original = f"{previo['mensaje']} | corrección: {texto}" if anterior else texto
@@ -260,6 +264,7 @@ COMANDOS = [
     BotCommand("lista", "Lista de compras"),
     BotCommand("recordatorios", "Próximos recordatorios"),
     BotCommand("planes", "Planes con fecha"),
+    BotCommand("cuotas", "Cuotas, fijos y tarjetas"),
     BotCommand("panoramas", "Panoramas pendientes"),
     BotCommand("notas", "Datos de la casa"),
     BotCommand("tareas", "Tareas de la casa y turnos"),
@@ -305,6 +310,7 @@ def _crear_app() -> Application:
         "metas": hogar.cmd_metas, "lista": hogar.cmd_lista, "recordatorios": hogar.cmd_recordatorios,
         "panoramas": hogar.cmd_panoramas, "notas": hogar.cmd_notas, "semana": consultas.cmd_semana,
         "tareas": hogar.cmd_tareas, "menu": _cmd_menu, "planes": hogar.cmd_planes, "iniciativa": conversacion.cmd_iniciativa,
+        "cuotas": compromisos.cmd_compromisos, "fijos": compromisos.cmd_compromisos,
     }
 
     # El estado (propuestas por confirmar, respuestas esperadas...) se guarda en Postgres: sobrevive a los deploys.
@@ -317,7 +323,8 @@ def _crear_app() -> Application:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & autorizados, texto_libre))
     app.add_handler(MessageHandler(filters.PHOTO & autorizados, consultas.foto))
     app.add_handler(CallbackQueryHandler(plata.botones_propuesta, pattern=r"^(conf|corr|canc):[0-9a-f]+$"))
-    app.add_handler(CallbackQueryHandler(plata.deshacer, pattern=r"^(deshacer|dpago):[\d,]+$"))
+    app.add_handler(CallbackQueryHandler(plata.deshacer, pattern=r"^(deshacer|dpago|dcuotas):[\d,]+$"))
+    app.add_handler(CallbackQueryHandler(compromisos.cb_compromiso, pattern=r"^comp:(tarjeta|fijo|cancelar):\d+$"))
     app.add_handler(CallbackQueryHandler(hogar.cb_meta, pattern=r"^meta:"))
     app.add_handler(CallbackQueryHandler(hogar.cb_lista, pattern=r"^lista:"))
     app.add_handler(CallbackQueryHandler(hogar.cb_panorama, pattern=r"^pan:"))

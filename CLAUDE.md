@@ -124,6 +124,18 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 - Hilo de la conversación (`bot/historial.py`): por chat, los últimos 10 mensajes de los últimos 30 min (del
   usuario y del bot; `BotConMemoria` anota todo lo que el bot envía o edita). Va al intérprete como "Conversación
   reciente" junto con el mensaje del bot que el usuario cita (responder). Solo en memoria: un deploy lo olvida.
+- Tarjetas, cuotas y fijos (`core/compromisos.py` + `bot/compromisos.py`, migración 014; /cuotas y /fijos muestran lo
+  mismo, en el grupo se manda por privado). Tarjetas: cada persona las suyas (`tarjetas`: día de facturación y de
+  pago); aviso por privado el día que factura y 2 días antes de pagar. Cuotas: el movimiento trae `cuotas` (monto =
+  TOTAL) y `tarjeta`; al confirmar se crea `planes_cuotas` en vez del gasto. 1ª cuota = la primera facturación
+  DESPUÉS de la compra (sin tarjeta: mismo día del mes siguiente); cada cuota se anota como movimiento normal
+  (`plan_cuotas_id`) el día que toca, vía `anotar_cuotas_vencidas` (idempotente, FOR UPDATE). Cancelar = deja de
+  anotar (conserva lo anotado); Deshacer (`dcuotas:`) = borra plan + cuotas (ON DELETE CASCADE). Fijos (tabla
+  `recurrentes`, ahora con tipo/usuario_id): el día del mes que toca se PROPONE con Confirmar/Corregir/Cancelar
+  (nunca se anotan solos); parten desde su creación. Todo corre en `avisos_diarios` a las 9:00.
+  Apple Pay y los correos no traen las cuotas: se dicen al Corregir la propuesta o después con editar_movimiento
+  (`cambios.cuotas`: borra el gasto y crea el plan). `origenes_similares` cuenta también los planes (monto_total),
+  así el correo del mismo monto no se duplica.
 - `bot/plata.py`: gastos/ingresos/pagos (con Confirmar/Corregir), /saldo, /resumen, /pague, avisos.
 - `bot/hogar.py`: metas, lista de compras, recordatorios, panoramas y notas de la casa.
 - `bot/comun.py`: utilidades compartidas.

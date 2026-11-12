@@ -16,7 +16,7 @@ from telegram.constants import ChatAction
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from bot import comun, conversacion, interprete, plata
+from bot import comun, compromisos, conversacion, interprete, plata
 from bot import hogar as hogar_bot
 from bot import pareja
 from core import cambio, config, costos, finanzas, hogar, metas, reportes
@@ -209,6 +209,9 @@ async def bucle_programados(app) -> None:
             ahora = finanzas.ahora()
             if ahora.hour >= 9 and await asyncio.to_thread(hogar.reservar_envio, f"tareas-{ahora:%Y-%m-%d}"):
                 await hogar_bot.avisar_tareas_del_dia(bot)
+            # Cuotas que tocan, fijos del día (sueldo, arriendo) y avisos de tarjetas.
+            if ahora.hour >= 9 and await asyncio.to_thread(hogar.reservar_envio, f"compromisos-{ahora:%Y-%m-%d}"):
+                await compromisos.avisos_diarios(app)
             if ahora.hour >= 10 and await asyncio.to_thread(hogar.reservar_envio, f"anticipos-{ahora:%Y-%m-%d}"):
                 await pareja.avisar_fechas_especiales(app)
                 await pareja.avisar_feriados(app)

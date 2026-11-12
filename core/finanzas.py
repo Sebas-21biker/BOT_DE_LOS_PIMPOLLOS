@@ -61,29 +61,36 @@ def registrar_movimiento(
     repartos: dict[int, Decimal] | None = None,
     fecha: date | None = None,
     es_prueba: bool = False,
+    plan_cuotas_id: int | None = None,
+    conn=None,
 ) -> int:
     """Guarda un movimiento; convierte a CLP con el tipo de cambio del día.
 
-    `repartos` = {usuario_id: porcentaje} si es compartido.
+    `repartos` = {usuario_id: porcentaje} si es compartido. `conn`: usar una transacción ya abierta.
     """
     tasa = cambio.tasa(moneda, hoy())
     monto_base = (monto * tasa).quantize(Decimal("0.01"))
-    with conectar() as conn, conn.transaction():
-        movimiento_id = conn.execute(
-            """
-            INSERT INTO movimientos (tipo, monto, moneda, monto_base, tipo_cambio_usado, categoria_id,
-                                     pagado_por, fecha, descripcion, es_compartido, mensaje_original, es_prueba)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (tipo, monto, moneda, monto_base, tasa, categoria_id, pagado_por, fecha or hoy(), descripcion or None,
-             bool(repartos), mensaje_original, es_prueba),
-        ).fetchone()["id"]
-        for usuario_id, porcentaje in (repartos or {}).items():
-            conn.execute(
-                "INSERT INTO repartos (movimiento_id, usuario_id, porcentaje) VALUES (%s, %s, %s)",
-                (movimiento_id, usuario_id, porcentaje),
-            )
+    if conn is None:
+        with conectar() as nueva, nueva.transaction():
+            return registrar_movimiento(tipo=tipo, monto=monto, moneda=moneda, categoria_id=categoria_id,
+                                        pagado_por=pagado_por, descripcion=descripcion,
+                                        mensaje_original=mensaje_original, repartos=repartos, fecha=fecha,
+                                        es_prueba=es_prueba, plan_cuotas_id=plan_cuotas_id, conn=nueva)
+    movimiento_id = conn.execute(
+        """
+        INSERT INTO movimientos (tipo, monto, moneda, monto_base, tipo_cambio_usado, categoria_id, pagado_por,
+                                 fecha, descripcion, es_compartido, mensaje_original, es_prueba, plan_cuotas_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (tipo, monto, moneda, monto_base, tasa, categoria_id, pagado_por, fecha or hoy(), descripcion or None,
+         bool(repartos), mensaje_original, es_prueba, plan_cuotas_id),
+    ).fetchone()["id"]
+    for usuario_id, porcentaje in (repartos or {}).items():
+        conn.execute(
+            "INSERT INTO repartos (movimiento_id, usuario_id, porcentaje) VALUES (%s, %s, %s)",
+            (movimiento_id, usuario_id, porcentaje),
+        )
     return movimiento_id
 
 
@@ -98,7 +105,7 @@ def borrar_movimiento(movimiento_id: int, usuario_id: int) -> bool:
 
 _SELECT_MOVIMIENTO = """
     SELECT m.id, m.tipo, m.monto, m.moneda, m.monto_base, m.tipo_cambio_usado, m.fecha, m.descripcion,
-           m.es_compartido, m.es_prueba, m.pagado_por, c.nombre AS categoria,
+           m.es_compartido, m.es_prueba, m.pagado_por, m.plan_cuotas_id, c.nombre AS categoria,
            (SELECT r.porcentaje FROM repartos r WHERE r.movimiento_id = m.id AND r.usuario_id = m.pagado_por)
                AS porcentaje_pagador
     FROM movimientos m LEFT JOIN categorias c ON c.id = m.categoria_id
@@ -130,16 +137,22 @@ def origenes_similares(usuario_id: int, monto: Decimal, moneda: str, fecha: date
     """`mensaje_original` de los movimientos recientes del usuario con el mismo monto (±1 día).
 
     Sirve para no anotar dos veces un pago que llegó por dos caminos (Apple Pay y correo del banco).
+    Incluye las compras que se pasaron a cuotas (el plan guarda el total, no un movimiento de ese monto).
     """
     with conectar() as conn:
         return [r["mensaje_original"] or "" for r in conn.execute(
             """
             SELECT mensaje_original FROM movimientos
-            WHERE pagado_por = %s AND monto = %s AND moneda = %s
-              AND fecha BETWEEN %s::date - 1 AND %s::date + 1
+            WHERE pagado_por = %(u)s AND monto = %(m)s AND moneda = %(mon)s AND plan_cuotas_id IS NULL
+              AND fecha BETWEEN %(f)s::date - 1 AND %(f)s::date + 1
+              AND creado_en > NOW() - interval '3 days'
+            UNION ALL
+            SELECT mensaje_original FROM planes_cuotas
+            WHERE usuario_id = %(u)s AND monto_total = %(m)s AND moneda = %(mon)s
+              AND fecha_compra BETWEEN %(f)s::date - 1 AND %(f)s::date + 1
               AND creado_en > NOW() - interval '3 days'
             """,
-            (usuario_id, monto, moneda, fecha, fecha),
+            {"u": usuario_id, "m": monto, "mon": moneda, "f": fecha},
         )]
 
 
@@ -170,7 +183,8 @@ def borrar_pruebas() -> int:
     """Borra todos los movimientos y pagos de prueba. Devuelve cuántos borró."""
     with conectar() as conn:
         return (conn.execute("DELETE FROM movimientos WHERE es_prueba").rowcount
-                + conn.execute("DELETE FROM liquidaciones WHERE es_prueba").rowcount)
+                + conn.execute("DELETE FROM liquidaciones WHERE es_prueba").rowcount
+                + conn.execute("DELETE FROM planes_cuotas WHERE es_prueba").rowcount)
 
 
 def registrar_liquidacion(de_usuario: int, a_usuario: int, monto: Decimal, fecha: date | None,
