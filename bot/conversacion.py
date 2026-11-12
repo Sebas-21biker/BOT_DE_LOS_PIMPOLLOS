@@ -295,6 +295,9 @@ async def _quizas_intervenir(app, chat_id: int, tramo: list[dict], texto: str, e
     try:
         await app.bot.send_message(chat_id, escape(mensaje), parse_mode="HTML", reply_markup=teclado(
             [boton("👍 Buena", f"ini:si:{iid}"), boton("🤫 Mejor no", f"ini:no:{iid}")]))
+        # Si le contestan ("dale, anótalo"), que el detector lo considere aunque no lo nombren.
+        for uid in {m["usuario_id"] for m in tramo if m.get("usuario_id")}:
+            abrir_ventana(chat_id, uid, finanzas.ahora())
     except TelegramError:
         log.warning("No pude intervenir en el grupo %s", chat_id)
 
@@ -385,6 +388,75 @@ async def cb_dato_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await query.answer("💝 Guardado")
     await query.edit_message_text(f"💝 Guardado en tu perfil: <i>{escape(pedido['texto'] if pedido else '')}</i>",
                                   parse_mode="HTML")
+
+
+# ----- ¿le hablan sin nombrarlo? ventana de conversación + detector (Haiku) -----
+#
+# Después de que alguien le habla al bot (lo nombra, le responde o el detector lo reconoce), sus mensajes de los
+# próximos minutos se le pasan al detector aunque no sean preguntas: así se puede conversar de corrido. Fuera de
+# esa ventana, solo lo que suena a pregunta o pedido. Un filtro gratis descarta el resto ("jaja", emojis, charla
+# corta), y ante la duda el detector dice que no: mejor callado que metido.
+
+VENTANA = timedelta(minutes=3)
+MAX_DETECCIONES_DIA = 150
+
+_ventanas: dict[tuple[int, int], datetime] = {}
+_detecciones: dict = {}
+_RE_PEDIDO = re.compile(
+    r"^(oye|dime|sabes|sabias|puedes|podrias|ayudame|ayudanos|recomiendame|recomiendanos|cuentame|explicame|"
+    r"que opinas|y tu|tu que|que me|que nos)\b"
+    r"|\b(opinas|recomiendas|me ayudas|nos ayudas|que sugieres|que harias)\b")
+_RE_RELLENO = re.compile(r"(ja|je|ji|ha|xd|lol|ok|oka|okis|dale|si|no|ya|wena|gracias|vale|jsjs|sii+|noo+)+")
+
+
+def abrir_ventana(chat_id: int, usuario_id: int, ahora: datetime) -> None:
+    _ventanas[(chat_id, usuario_id)] = ahora
+    if len(_ventanas) > 200:   # no crece sin límite
+        for clave in sorted(_ventanas, key=_ventanas.get)[:100]:
+            del _ventanas[clave]
+
+
+def en_ventana(chat_id: int, usuario_id: int, ahora: datetime) -> bool:
+    abierta = _ventanas.get((chat_id, usuario_id))
+    return abierta is not None and ahora - abierta <= VENTANA
+
+
+def podria_ser_para_mi(texto: str, ventana: bool) -> bool:
+    """Filtro gratis antes del detector: ¿vale la pena preguntarle a Haiku si este mensaje es para el bot?"""
+    palabras = re.findall(r"\w+", normalizar(texto))
+    if not palabras or all(_RE_RELLENO.fullmatch(p) for p in palabras):
+        return False   # emojis, risas, "ok", "gracias"
+    if ventana:
+        return True
+    return len(palabras) >= 3 and ("?" in texto or bool(_RE_PEDIDO.search(" ".join(palabras))))
+
+
+def _hay_cupo_detector(ahora: datetime) -> bool:
+    dia = ahora.date()
+    if _detecciones.get("dia") != dia:
+        _detecciones.update(dia=dia, n=0)
+    if _detecciones["n"] >= MAX_DETECCIONES_DIA:
+        return False
+    _detecciones["n"] += 1
+    return True
+
+
+async def me_hablan(chat_id: int, usuario: dict, texto: str, hilo: str, ahora: datetime) -> bool:
+    """¿Este mensaje del grupo le habla al bot aunque no lo nombre? Respeta silencio, nivel off y descanso."""
+    ventana = en_ventana(chat_id, usuario["id"], ahora)
+    if not podria_ser_para_mi(texto, ventana) or (en_descanso(ahora) and not ventana):
+        return False
+    prefs = await asyncio.to_thread(iniciativa.preferencias, chat_id)
+    if prefs["nivel"] == "off" or (prefs.get("silencio_hasta") and prefs["silencio_hasta"] > ahora):
+        return False
+    if not _hay_cupo_detector(ahora):
+        return False
+    nombres = [u["nombre"] for u in await asyncio.to_thread(finanzas.todos_los_usuarios)]
+    try:
+        return await interprete.detectar_si_me_hablan(hilo, usuario["nombre"], texto, nombres, ventana)
+    except Exception:
+        log.exception("Falló el detector de '¿me hablan?'")
+        return False
 
 
 # ----- lo que hacen los usuarios: guardar la charla, silencio, botones, /iniciativa -----

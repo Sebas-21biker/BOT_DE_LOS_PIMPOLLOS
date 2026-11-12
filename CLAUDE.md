@@ -115,6 +115,8 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
   /auto/{token} los correos con la etiqueta "Pimpollo" (origen "correo", id del correo). El bot nunca tiene
   acceso al Gmail. En correos: el paso 1 se acota a movimientos/pago_pareja/otro; lo que no es movimiento
   (promos, claves, estados de cuenta) se ignora en silencio; transferencias con la pareja → pago_pareja.
+  Pero si la IA falla o el paso 1 dijo movimiento y el paso 2 no logró los datos (`intencion_inicial`), se le
+  avisa al usuario con el asunto para que lo anote él: un cargo nunca se pierde callado.
   Antiduplicados: un correo con el mismo monto (±1 día) que un pago llegado por otro camino (Apple Pay o a
   mano) se descarta como "eco" (registrado en envios_programados con prefijo eco:).
 - Costo de la IA: cada llamada a Claude se registra en `uso_ia` (tokens, modelo, motivo) y /costo calcula
@@ -150,7 +152,12 @@ El saldo entre ambos NO se guarda: se calcula desde movimientos + repartos + liq
 - Monedas USD/MXN: `core/cambio.py` baja el tipo de cambio una vez al día (open.er-api.com) y lo guarda
   en `tipos_cambio`; `monto_base` queda en CLP.
 - Tareas de la casa con turnos (`tareas`), menú semanal generado por Claude con ingredientes a la lista.
-- En grupos: /panel fija accesos directos; el bot conversa solo si lo nombran ("pimpollo") o le responden.
+- En grupos: /panel fija accesos directos; el bot conversa si lo nombran ("pimpollo"), le responden, o el detector
+  reconoce que le hablan (`conversacion.me_hablan`): filtro gratis (`podria_ser_para_mi`: fuera de la ventana solo
+  preguntas/pedidos de 3+ palabras; risas/"ok" nunca) → Haiku (`interprete.detectar_si_me_hablan`, motivo "detector",
+  ante la duda false, tope 150/día). Ventana de conversación: 3 min por persona desde que le hablan o desde que el
+  bot interviene por iniciativa. No corre con silencio, nivel off ni en descanso (salvo dentro de la ventana).
+  "silencio" solo se acepta si lo nombran explícitamente. En el grupo el hilo (`historial`) guarda toda la charla.
   Requiere privacy mode desactivado en BotFather (verificado: `getMe` → can_read_all_group_messages = true;
   si se cambia, hay que sacar y volver a agregar el bot al grupo).
 - Filtro del grupo (`bot/conversacion.py`): el bot recibe TODA la charla, pero solo pasa a la IA lo que le

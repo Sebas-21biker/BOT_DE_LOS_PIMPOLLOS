@@ -172,13 +172,26 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if grupo and esperando and esperando.get("tipo") == "pregunta":
         esperando = None  # la pregunta pimpolla se hizo por privado: se responde allá, no con la charla del grupo
 
+    # El hilo de la charla (antes de anotar este mensaje). En el grupo entra toda la charla, no solo lo que va al bot.
+    chat_id = update.effective_chat.id
+    hilo = historial.reciente(chat_id)
+    historial.anotar(chat_id, usuario["nombre"], texto)
+
+    le_hablan = True
     if grupo:
-        le_hablan = _le_hablan(update, context)
+        ahora = finanzas.ahora()
+        nombrado = _le_hablan(update, context)   # lo nombran, @mención o le responden
+        le_hablan = nombrado
+        if not le_hablan and esperando is None and "corrigiendo" not in context.user_data:
+            # Sin nombrarlo: ventana de conversación + detector barato (Haiku). Ante la duda, no.
+            le_hablan = await conversacion.me_hablan(chat_id, usuario, texto, hilo, ahora)
+        if le_hablan:
+            conversacion.abrir_ventana(chat_id, usuario["id"], ahora)
         pasa_a_ia = (esperando is not None or "corrigiendo" in context.user_data or le_hablan
                      or conversacion.merece_ia(texto, tareas))
         # Memoria corta (48 h) para que Pimpollo evalúe la charla cuando se pausa (fase A: iniciativa).
         await conversacion.guardar_mensaje(update, usuario, al_bot=pasa_a_ia)
-        if le_hablan and await conversacion.manejar_silencio(update):
+        if nombrado and await conversacion.manejar_silencio(update):
             return
         # En el grupo el bot recibe toda la conversación: la charla normal no pasa por la IA (no gasta tokens).
         if not pasa_a_ia:
@@ -201,10 +214,7 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         anterior = (comun.sin_marca_prueba(previo["mensaje"]), previo["crudo"])
         prueba = prueba or previo["es_prueba"]
 
-    # El hilo de la charla (antes de anotar este mensaje) y el mensaje del bot al que responde, si cita uno.
-    chat_id = update.effective_chat.id
-    hilo = historial.reciente(chat_id)
-    historial.anotar(chat_id, usuario["nombre"], texto)
+    # El mensaje del bot al que responde, si cita uno.
     citado = update.message.reply_to_message
     responde_a = (citado.text or citado.caption or "") if citado and citado.from_user.id == context.bot.id else ""
 
@@ -245,8 +255,8 @@ async def texto_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await pareja.pedir_ideas(update, context, usuario, datos["busqueda"])
     elif intencion == "consulta":
         await consultas.responder_consulta(update, usuario, datos["consulta"], texto)
-    elif grupo and not _le_hablan(update, context):
-        return  # en el grupo solo conversa si lo nombran o le responden
+    elif grupo and not le_hablan:
+        return  # en el grupo solo conversa si le hablan (lo nombran, le responden o el detector lo reconoce)
     else:
         await update.message.reply_text(escape(datos["respuesta"]) or "Mmm, no caché qué necesitas 🤔 Mira /ayuda",
                                         parse_mode="HTML")

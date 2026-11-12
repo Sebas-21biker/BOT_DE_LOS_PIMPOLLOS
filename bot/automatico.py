@@ -64,7 +64,13 @@ def _es_duplicado_de_correo(app, usuario: dict, mov: dict) -> bool:
 
 # Un correo que no trae ningún monto ($12.990, US$ 30, "Monto: 25.000") no puede ser un cargo:
 # se descarta sin llamar a Claude (las promociones con "30% dcto" cuestan $0).
-_RE_MONTO = re.compile(r"(\$|\b(clp|usd|mxn|us\$)\b)\s?\d|\bmonto\b\D{0,20}\d", re.IGNORECASE)
+_RE_MONTO = re.compile(r"(\$|\b(clp|usd|mxn|us\$)\b)\s?\d|\bmonto\b\D{0,20}\d"
+                       r"|\b\d{1,3}(\.\d{3})+\b|\b\d+\s?pesos\b", re.IGNORECASE)
+
+
+def _asunto(texto: str) -> str:
+    """Lo primero del correo (el script manda "Asunto: ..." al inicio), para mostrárselo al usuario."""
+    return escape(texto[:220] + ("…" if len(texto) > 220 else ""))
 
 
 async def procesar_pago(app, usuario: dict, texto: str, origen: str = "atajo") -> None:
@@ -85,12 +91,23 @@ async def procesar_pago(app, usuario: dict, texto: str, origen: str = "atajo") -
             intenciones_posibles=["movimientos", "pago_pareja", "otro"],
             motivo=origen, extraer_otro=origen != "correo")
     except interprete.ErrorInterprete:
-        datos = {"intencion": "otro"}
+        log.exception("No pude interpretar el aviso %s de %s", origen, usuario["nombre"])
+        datos = {"intencion": "otro", "intencion_inicial": "error"}
     try:
         if datos["intencion"] not in ("movimientos", "pago_pareja"):
             if origen == "correo":
-                log.info("Correo de %s sin movimiento, se ignora: %s", usuario["nombre"], texto[:80])
-                return  # promociones, claves, etc.: silencio
+                # "otro" desde el paso 1 = promoción, clave, estado de cuenta: silencio. Pero si la IA falló, o
+                # creyó que era un cargo y no logró sacar los datos, se avisa: un cargo no se puede perder callado.
+                if datos.get("intencion_inicial", "otro") == "otro":
+                    log.info("Correo de %s sin movimiento, se ignora: %s", usuario["nombre"], texto[:80])
+                    return
+                log.warning("Correo de %s parece un cargo pero no lo pude leer: %s", usuario["nombre"], texto[:80])
+                await app.bot.send_message(
+                    usuario["telegram_id"],
+                    f"🏦 Me llegó un correo del banco que parece un cargo, pero no lo pude leer bien:\n"
+                    f"<i>{_asunto(texto)}</i>\n\n¿Me lo anotas tú? (ej: <i>gasté 12.990 en Lider</i>) 🙏",
+                    parse_mode="HTML")
+                return
             await app.bot.send_message(
                 usuario["telegram_id"],
                 f"📱 Me llegó un aviso de pago pero no lo caché:\n<i>{escape(texto)}</i>\n¿Me lo anotas tú? 🙏",

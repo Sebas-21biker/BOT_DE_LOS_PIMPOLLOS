@@ -416,6 +416,7 @@ async def interpretar(
                                                                  "enum": intenciones_posibles or INTENCIONES}}),
                               motivo)
         intencion = paso1["intencion"]
+    intencion_inicial = intencion
 
     # Paso 2: los datos de esa intención. Si es "otro" y nadie va a leer la respuesta (avisos automáticos),
     # no vale la pena gastar la segunda llamada.
@@ -440,7 +441,10 @@ async def interpretar(
         datos.update(extraido)
         datos["crudo"] = json.dumps(extraido, ensure_ascii=False)
 
-    return _validar(datos, ahora, categorias_gasto, categorias_ingreso, metas_activas, tareas_activas)
+    datos = _validar(datos, ahora, categorias_gasto, categorias_ingreso, metas_activas, tareas_activas)
+    # Lo que creyó en el paso 1 (si después quedó en "otro", es que no logró sacar los datos: ej. un correo raro).
+    datos["intencion_inicial"] = intencion_inicial
+    return datos
 
 
 def _validar(datos: dict, ahora: datetime, categorias_gasto: list[str], categorias_ingreso: list[str],
@@ -720,6 +724,31 @@ async def clasificar_conversacion(tramo: str, nombres: list[str], ahora: datetim
     datos["deseos"] = [d for d in datos["deseos"] if d["quien"] in nombres and d["deseo"].strip()]
     datos["datos"] = [d for d in datos.get("datos", []) if d["quien"] in nombres and d["dato"].strip()][:2]
     return datos
+
+
+DETECTOR_SISTEMA = """En un grupo de Telegram conversan una pareja en Chile y "Pimpollo", su bot asistente (anota gastos,
+listas, recordatorios, planes, responde preguntas sobre sus finanzas y da ideas). Decide si el ÚLTIMO mensaje le
+habla a Pimpollo (le pide algo, le pregunta, o le contesta / sigue lo que Pimpollo acaba de decir) o si es
+conversación entre ellos dos.
+
+- Preguntas entre ellos son false aunque sean preguntas: "amor, ¿pasas por pan?", "¿qué quieres comer?", "¿a qué
+  hora llegas?", "¿viste lo que te mandé?".
+- Si Pimpollo acaba de hablar y el mensaje le responde o sigue con él ("¿y para el domingo?", "dale, anótalo",
+  "¿y eso cuánto sale?"), true.
+- Preguntas abiertas al aire que un asistente responde ("¿cuánto llevamos gastado este mes?", "¿qué peli podemos
+  ver?", "¿a quién le toca la basura?") son true si nadie se las está preguntando claramente a la otra persona.
+- Ante la duda, false: es mucho peor meterse en una conversación privada que quedarse callado."""
+
+
+async def detectar_si_me_hablan(hilo: str, autor: str, texto: str, nombres: list[str], ventana: bool) -> bool:
+    """Detector barato (Haiku): ¿el último mensaje del grupo es para el bot, aunque no lo nombre?"""
+    contenido = (f"La pareja: {', '.join(sorted(set(nombres)))}.\n"
+                 + ("Pimpollo estaba conversando con quien escribe hace un momento.\n" if ventana else "")
+                 + f"\nConversación reciente:\n{hilo or '(nada)'}\n\nÚLTIMO mensaje — {autor}: {texto}")
+    datos = await _llamar(DETECTOR_SISTEMA, [{"role": "user", "content": contenido}],
+                          _obj({"para_el_bot": {"type": "boolean"}}), motivo="detector",
+                          modelo=config.claude_model_clasificador())
+    return bool(datos["para_el_bot"])
 
 
 INTERVENCION_SISTEMA = """Eres "Pimpollo", el bot asistente de una pareja en Chile, y estás en su grupo de Telegram.
